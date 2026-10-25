@@ -8,7 +8,7 @@ compatibility_flags = ["nodejs_compat"]
 #   WEBHOOK_SECRET  — любая длинная случайная строка
 
 [vars]
-GROUP_CHAT_ID = "0"          # id группы, узнать командой /chatid в группе
+GROUP_CHAT_ID = "-1002069590465"   # Municorn Football
 TIMEZONE = "Asia/Nicosia"
 PLAYER_LIMIT = "10"
 GAME_WEEKDAY = "4"           # 1 = пн … 7 = вс; 4 = четверг
