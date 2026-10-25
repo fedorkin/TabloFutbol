@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { applyMigrations } from "./db";
 import { getPlatformProxy } from "wrangler";
 import { Api } from "grammy";
 import type { Transformer } from "grammy";
@@ -89,11 +89,7 @@ beforeAll(async () => {
   // Локальная D1 из wrangler.toml, в памяти (persist: false)
   proxy = await getPlatformProxy<{ DB: D1Database }>({ persist: false });
   const db = proxy.env.DB;
-  const sql: string = readFileSync("migrations/0001_init.sql", "utf8");
-  const statements = sql.split(/;\s*\n/).map((s: string) => s.trim());
-  for (const stmt of statements.filter((s: string) => s.replace(/--.*$/gm, "").trim())) {
-    await db.prepare(stmt).run();
-  }
+  await applyMigrations(db);
   env = {
     DB: db, BOT_TOKEN: "test", WEBHOOK_SECRET: "s", GROUP_CHAT_ID: String(GROUP),
     TIMEZONE: "Asia/Nicosia", PLAYER_LIMIT: "10", GAME_WEEKDAY: "4", GAME_TIME: "20:00", GAME_PLACE: "",

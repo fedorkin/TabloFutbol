@@ -3,6 +3,7 @@ import { Api, Bot, webhookCallback } from "grammy";
 import type { Env } from "./env";
 import { BOT_COMMANDS, createBot } from "./bot";
 import { runScheduled } from "./cron";
+import { createApi } from "./api";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -10,7 +11,9 @@ const app = new Hono<{ Bindings: Env }>();
 let bot: Bot | undefined;
 const getBot = (env: Env) => (bot ??= createBot(env));
 
-app.get("/", (c) => c.text("soccer-bot ok"));
+app.get("/", (c) => c.text("tablo-futbol ok"));
+
+app.route("/api", createApi());
 
 app.post("/webhook", (c) =>
   webhookCallback(getBot(c.env), "cloudflare-mod", { secretToken: c.env.WEBHOOK_SECRET })(c.req.raw),
@@ -27,6 +30,10 @@ app.get("/setup", async (c) => {
     drop_pending_updates: true,
   });
   await api.setMyCommands(BOT_COMMANDS, { scope: { type: "all_group_chats" } });
+  // Кнопка «Табло» в личке с ботом
+  await api.setChatMenuButton({
+    menu_button: { type: "web_app", text: "Табло", web_app: { url: new URL("/app/", c.req.url).toString() } },
+  });
   return c.json({ ok: true, webhook: url, info: await api.getWebhookInfo() });
 });
 

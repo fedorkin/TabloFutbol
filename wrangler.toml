@@ -15,6 +15,10 @@ GAME_WEEKDAY = "4"           # 1 = пн … 7 = вс; 4 = четверг
 GAME_TIME = "18:30"
 GAME_PLACE = ""              # необязательно, например "Стадион X"
 
+# Mini App (public/app/index.html) — отдаётся как статика по /app/
+[assets]
+directory = "public"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "soccer"

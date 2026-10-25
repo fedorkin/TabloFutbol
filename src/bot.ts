@@ -17,6 +17,8 @@ import {
 import { localToday, nextGameDate } from "./dates";
 import { esc, renderRosterText } from "./render";
 import { notifyPromoted, postWeek, refreshWeekMessage } from "./service";
+import { autoTeams, getLineup, getMatchByWeek, HttpError, renderLineups } from "./match";
+import { InlineKeyboard } from "grammy";
 
 const HELP = `<b>Команды</b>
 /list — текущий состав
@@ -27,7 +29,9 @@ const HELP = `<b>Команды</b>
 /close, /open — закрыть / открыть запись
 /limit 12 — изменить число мест
 /add Имя — добавить игрока без Telegram (или ответом на сообщение игрока)
-/remove 7 — убрать игрока №7 из списка (или ответом на его сообщение)`;
+/remove 7 — убрать игрока №7 из списка (или ответом на его сообщение)
+/teams — поделить основу на две команды по рейтингу
+/tablo — кнопка открытия табло (счёт, составы, рейтинги)`;
 
 // Telegram шлёт сообщения анонимных админов от имени этого бота.
 const GROUP_ANONYMOUS_BOT = 1087968824;
@@ -199,6 +203,32 @@ export function createBot(env: Env, botInfo?: UserFromGetMe): Bot {
     }),
   );
 
+  const tabloKeyboard = (ctx: Context) =>
+    new InlineKeyboard().url("📲 Открыть табло", `https://t.me/${ctx.me.username}?startapp=tablo`);
+
+  bot.command("tablo", async (ctx) => {
+    if (!(await checkGroup(ctx))) return;
+    await ctx.reply("Табло: счёт, составы и рейтинги", { reply_markup: tabloKeyboard(ctx) });
+  });
+
+  bot.command(
+    "teams",
+    admin(async (ctx, week) => {
+      if (!week) return noGame(ctx);
+      try {
+        await autoTeams(db, week, "best");
+      } catch (e) {
+        if (e instanceof HttpError) return ctx.reply(e.message);
+        throw e;
+      }
+      const match = (await getMatchByWeek(db, week.id))!;
+      await ctx.reply(renderLineups(week, await getLineup(db, match.id)), {
+        parse_mode: "HTML",
+        reply_markup: tabloKeyboard(ctx),
+      });
+    }),
+  );
+
   bot.catch((err) => console.error("bot error", err.error));
   return bot;
 }
@@ -211,6 +241,8 @@ export const BOT_COMMANDS = [
   { command: "limit", description: "Число мест, напр. /limit 12 (админ)" },
   { command: "add", description: "Добавить игрока (админ)" },
   { command: "remove", description: "Убрать игрока по номеру (админ)" },
+  { command: "tablo", description: "Открыть табло" },
+  { command: "teams", description: "Поделить на команды (админ)" },
   { command: "help", description: "Справка" },
 ];
 
