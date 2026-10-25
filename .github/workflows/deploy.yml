@@ -40,20 +40,23 @@ jobs:
 
       - name: Ensure D1 database
         run: |
-          id=$(npx wrangler d1 list --json | jq -r '.[] | select(.name=="soccer") | .uuid')
+          list=$(scripts/ci-run.sh npx wrangler d1 list --json) || exit 1
+          id=$(jq -r '.[] | select(.name=="soccer") | .uuid' <<<"$list")
           if [ -z "$id" ]; then
-            npx wrangler d1 create soccer
-            id=$(npx wrangler d1 list --json | jq -r '.[] | select(.name=="soccer") | .uuid')
+            scripts/ci-run.sh npx wrangler d1 create soccer || exit 1
+            list=$(scripts/ci-run.sh npx wrangler d1 list --json) || exit 1
+            id=$(jq -r '.[] | select(.name=="soccer") | .uuid' <<<"$list")
           fi
           echo "D1 id: $id"
           sed -i "s/^database_id = .*/database_id = \"$id\"/" wrangler.toml
 
       - name: Apply migrations
-        run: npx wrangler d1 migrations apply soccer --remote
+        run: scripts/ci-run.sh npx wrangler d1 migrations apply soccer --remote
 
       - name: Deploy worker
         run: |
-          npx wrangler deploy --var "GROUP_CHAT_ID:$GROUP_CHAT_ID" | tee deploy.log
+          scripts/ci-run.sh npx wrangler deploy --var "GROUP_CHAT_ID:$GROUP_CHAT_ID" > deploy.log || { cat deploy.log; exit 1; }
+          cat deploy.log
           url=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -1)
           if [ -z "$url" ]; then echo "::error::Не нашёл адрес workers.dev в выводе deploy"; exit 1; fi
           echo "WORKER_URL=$url" >> "$GITHUB_ENV"
@@ -61,8 +64,8 @@ jobs:
       - name: Upload bot secrets
         run: |
           jq -n --arg b "$BOT_TOKEN" --arg w "$WEBHOOK_SECRET" '{BOT_TOKEN:$b, WEBHOOK_SECRET:$w}' > secrets.json
-          npx wrangler secret bulk secrets.json
-          rm secrets.json
+          scripts/ci-run.sh npx wrangler secret bulk secrets.json; code=$?
+          rm secrets.json; exit $code
 
       - name: Register Telegram webhook
         run: |
