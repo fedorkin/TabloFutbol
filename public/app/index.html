@@ -62,7 +62,7 @@
   .rate .name { flex: 1; }
   .rate .nm { border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; padding: 0; }
   .rate .sub { color: var(--hint); font-size: 13px; }
-  .input { width: 100%; font: inherit; font-size: 17px; padding: 12px; border-radius: 12px; border: 1px solid var(--bg2); background: var(--bg2); color: var(--text); } .rate .val { width: 52px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .input { width: 100%; font: inherit; font-size: 17px; padding: 12px; border-radius: 12px; border: 1px solid var(--bg2); background: var(--bg2); color: var(--text); } .rate .val { width: 56px; height: 40px; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 700; text-decoration: underline dotted; text-underline-offset: 4px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
   .rate button { width: 40px; height: 40px; border: 0; border-radius: 10px; background: var(--bg2); color: var(--text); font-size: 20px; }
   .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: flex-end; z-index: 10; }
   .sheet { background: var(--bg); width: 100%; max-height: 85vh; overflow: auto; border-radius: 18px 18px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
@@ -231,6 +231,27 @@
     skillTimers[id] = setTimeout(() => api("PUT", `/players/${id}/skill`, { skill: p.skill }).catch((e) => toast(e.message)), 500);
   }
 
+  async function openSkill(id) {
+    S.sheet = { kind: "skill", id, data: null }; render();
+    setTimeout(() => { const i = document.getElementById("skill-input"); if (i) { i.focus(); i.select(); } }, 50);
+    try { const data = await api("GET", `/players/${id}/history`); if (S.sheet && S.sheet.kind === "skill" && S.sheet.id === id) S.sheet.data = data; }
+    catch (e) { toast(e.message); }
+    render();
+  }
+
+  const parseSkill = (v) => Math.round(Number(String(v).replace(",", ".").trim()) * 100) / 100;
+
+  async function saveSkill(id) {
+    const v = parseSkill(document.getElementById("skill-input").value);
+    if (!(v >= 1 && v <= 10)) { toast("Оценка от 1 до 10, например 6,3"); haptic("error"); return; }
+    try {
+      await api("PUT", `/players/${id}/skill`, { skill: v });
+      const p = S.players.find((x) => x.id === id); if (p) p.skill = v;
+      S.sheet = null; haptic("success"); toast("Оценка сохранена");
+    } catch (e) { toast(e.message); haptic("error"); }
+    render();
+  }
+
   async function saveName(id, name) {
     try {
       const r = await api("PUT", `/players/${id}/name`, { name });
@@ -380,11 +401,11 @@
     render();
   }
 
-  function sparkline(values) {
+  function sparkline(values, marks = []) {
     if (values.length < 2) return "";
     const w = 300, h = 70, pad = 6, min = Math.min(...values), max = Math.max(...values), span = max - min || 1;
     const pts = values.map((v, i) => `${(pad + (i * (w - 2 * pad)) / (values.length - 1)).toFixed(1)},${(h - pad - ((v - min) * (h - 2 * pad)) / span).toFixed(1)}`);
-    return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${pts.join(" ")}" fill="none" stroke="var(--btn)" stroke-width="2.5" stroke-linejoin="round"/></svg>`;
+    return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${pts.join(" ")}" fill="none" stroke="var(--btn)" stroke-width="2.5" stroke-linejoin="round"/>${marks.map((i) => { const [x, y] = pts[i].split(","); return `<circle cx="${x}" cy="${y}" r="4.5" fill="var(--bg)" stroke="var(--B)" stroke-width="2.5"/>`; }).join("")}</svg>`;
   }
 
   function matchSheet(d) {
@@ -400,14 +421,30 @@
       <h2>Составы${d.ratings.length ? " и рейтинг" : ""}</h2><div class="cols">${col("A")}${col("B")}</div>`;
   }
 
+  /** Матчи и ручные правки игрока в хронологическом порядке (только у админа есть after/at/edits). */
+  function timeline(d) {
+    const items = [
+      ...d.matches.filter((m) => m.after != null).map((m) => ({ kind: "match", at: m.at || m.date, before: Math.round((m.after - m.delta) * 100) / 100, after: m.after, m })),
+      ...(d.edits || []).map((e) => ({ kind: "edit", at: e.at, before: e.before, after: e.after, e })),
+    ];
+    return items.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  }
+  const shortDate = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" }); };
+  function logLine(it) {
+    if (it.kind === "edit") return `<li><span class="time">${esc(shortDate(it.at))}</span><span class="what">✎ ${esc(it.e.by)}: ${fmtSkill(it.before)} → <b>${fmtSkill(it.after)}</b></span></li>`;
+    return `<li><span class="time">${esc(shortDate(it.m.date))}</span><span class="what">${resultMark[it.m.result]} матч ${fmtD(it.m.delta)} → <b>${fmtSkill(it.after)}</b></span></li>`;
+  }
+
   function playerSheet(d) {
     const n = d.matches.length;
     const sum = (k) => d.matches.reduce((s, m) => s + m[k], 0);
     const wins = d.matches.filter((m) => m.result === "W").length;
-    const curve = d.matches.slice().reverse().map((m) => m.after).filter((v) => v != null);
+    const tl = timeline(d);
     return `<h3>${esc(d.name)}</h3>
       <p class="muted">${n} игр · ${wins} побед${n ? ` (${Math.round((100 * wins) / n)}%)` : ""} · ${sum("goals")} ⚽ · ${sum("assists")} 🅰️${d.skill != null ? ` · рейтинг ${d.skill.toFixed(2)}` : ""}</p>
-      ${curve.length >= 2 ? `<h2>Рейтинг</h2>${sparkline([curve[0] - d.matches[n - 1].delta, ...curve])}` : ""}
+      ${tl.length ? `<h2>Рейтинг</h2>${sparkline([tl[0].before, ...tl.map((x) => x.after)], tl.map((x, i) => (x.kind === "edit" ? i + 1 : -1)).filter((i) => i > 0))}
+        <ul class="feed">${tl.slice().reverse().slice(0, 8).map(logLine).join("")}</ul>
+        <p class="muted">✎ — ручная правка админа, точки на графике.</p>` : ""}
       <h2>Матчи</h2>
       ${n ? d.matches.map((m) => `<button class="card" data-a="match" data-id="${m.matchId}">
         <span class="grow">${resultMark[m.result]} ${esc(m.title)}<div class="sub muted">${m.goals ? m.goals + " ⚽ " : ""}${m.assists ? m.assists + " 🅰️ " : ""}${m.ownGoals ? m.ownGoals + " автогол" : ""}</div></span>
@@ -418,10 +455,10 @@
 
   function ratingsView() {
     if (!S.players) { loadPlayers(); return `<div class="empty">Загрузка…</div>`; }
-    return `<p class="muted">Оценка 1–10 для деления на команды — видят только админы. Нажмите на имя, чтобы переименовать.</p>
+    return `<p class="muted">Оценка 1–10 для деления на команды — видят только админы. Нажмите на имя, чтобы переименовать, на число — чтобы задать точное значение.</p>
       ${S.players.map((p) => `<div class="rate"><button class="name nm" data-a="rename" data-id="${p.id}">${esc(p.name)} ✎
           <div class="sub">${p.guest ? "гость" : esc([p.renamed ? p.tgName : "", p.username ? "@" + p.username : ""].filter(Boolean).join(" · "))}</div></button>
-        <button data-a="skill" data-id="${p.id}" data-d="-1">−</button><span class="val">${fmtSkill(p.skill)}</span><button data-a="skill" data-id="${p.id}" data-d="1">+</button></div>`).join("")}`;
+        <button data-a="skill" data-id="${p.id}" data-d="-1">−</button><button class="val" data-a="skilledit" data-id="${p.id}">${fmtSkill(p.skill)}</button><button data-a="skill" data-id="${p.id}" data-d="1">+</button></div>`).join("")}`;
   }
 
   function sheetView() {
@@ -439,6 +476,19 @@
     if (S.sheet.kind === "match" || S.sheet.kind === "player") {
       const body = !S.sheet.data ? `<div class="empty">Загрузка…</div>` : S.sheet.kind === "match" ? matchSheet(S.sheet.data) : playerSheet(S.sheet.data);
       return `<div class="sheet-bg" data-a="close"><div class="sheet" data-stop>${body}<button class="btn ghost" data-a="close">Закрыть</button></div></div>`;
+    }
+    if (S.sheet.kind === "skill") {
+      const p = (S.players || []).find((x) => x.id === S.sheet.id); if (!p) return "";
+      const d = S.sheet.data;
+      const tl = d ? timeline(d) : [];
+      return `<div class="sheet-bg" data-a="close"><div class="sheet" data-stop>
+        <h3>Оценка: ${esc(p.name)}</h3>
+        <input class="input" id="skill-input" inputmode="decimal" value="${fmtSkill(p.skill)}" autocomplete="off" style="font-size:28px;text-align:center;font-weight:700">
+        <div class="row" style="margin-top:8px">${[-1, -0.1, 0.1, 1].map((x) => `<button class="btn ghost" style="margin:0" data-a="skillstep" data-d="${x}">${x > 0 ? "+" : "−"}${String(Math.abs(x)).replace(".", ",")}</button>`).join("")}</div>
+        <button class="btn" data-a="skill-save">Сохранить</button>
+        <h2>История</h2>
+        ${!d ? `<div class="muted">Загрузка…</div>` : tl.length ? `<ul class="feed">${tl.slice().reverse().slice(0, 6).map(logLine).join("")}</ul>` : `<p class="muted">Матчей и правок пока не было</p>`}
+        <button class="btn ghost" data-a="close">Отмена</button></div></div>`;
     }
     if (S.sheet.kind === "rename") {
       const p = (S.players || []).find((x) => x.id === S.sheet.id); if (!p) return "";
@@ -476,9 +526,11 @@
     // шторку с полем ввода не перерисовываем при поллинге — иначе пропадёт набранный текст и клавиатура
     const key = S.sheet ? JSON.stringify(S.sheet) : "";
     // то же для карточек истории — иначе сбрасывается прокрутка
-    if (!(S.sheet && ["rename", "match", "player"].includes(S.sheet.kind) && key === renderedSheet)) {
+    if (!(S.sheet && ["rename", "skill", "match", "player"].includes(S.sheet.kind) && key === renderedSheet)) {
+      const active = document.activeElement && document.activeElement.id ? { id: document.activeElement.id, v: document.activeElement.value } : null;
       document.getElementById("sheet").innerHTML = sheetView();
       renderedSheet = key;
+      if (active && active.v != null) { const el = document.getElementById(active.id); if (el) { el.value = active.v; el.focus(); } }
     }
   }
   let renderedSheet = "";
@@ -517,6 +569,14 @@
         saveName(S.sheet.id, v); break;
       }
       case "rename-reset": saveName(S.sheet.id, null); break;
+      case "skilledit": tap(); openSkill(Number(id)); break;
+      case "skillstep": {
+        const i = document.getElementById("skill-input");
+        const cur = parseSkill(i.value);
+        const next = Math.round(Math.max(1, Math.min(10, (isNaN(cur) ? 5 : cur) + Number(el.dataset.d))) * 100) / 100;
+        i.value = String(next).replace(".", ","); tap(); break;
+      }
+      case "skill-save": saveSkill(S.sheet.id); break;
       case "finish":
         if (S.queue.length) { toast("Сначала дождитесь отправки голов"); break; }
         confirmBox("Завершить матч и отправить итог в группу?").then((ok) => ok && adminCall("POST", "/finish", undefined, "Итог отправлен в группу"));
@@ -527,6 +587,7 @@
 
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" && ev.target.id === "rename-input") { ev.preventDefault(); document.querySelector('[data-a="rename-save"]').click(); }
+    if (ev.key === "Enter" && ev.target.id === "skill-input") { ev.preventDefault(); document.querySelector('[data-a="skill-save"]').click(); }
   });
 
   // ---------- старт ----------

@@ -182,7 +182,7 @@ export async function setMatchStatus(db: D1Database, matchId: number, status: Ma
   await db
     .prepare(
       `UPDATE matches SET status = ?2,
-         finished_at = CASE WHEN ?2 = 'finished' THEN datetime('now') ELSE NULL END
+         finished_at = CASE WHEN ?2 = 'finished' THEN strftime('%Y-%m-%dT%H:%M:%fZ', 'now') ELSE NULL END
        WHERE id = ?1`,
     )
     .bind(matchId, status)
@@ -218,7 +218,7 @@ export function playerStats(events: MatchEvent[]): Map<number, PlayerMatchStats>
  */
 export async function finishMatch(db: D1Database, match: Match): Promise<RatingResult[]> {
   const claim = await db
-    .prepare(`UPDATE matches SET status = 'finished', finished_at = datetime('now') WHERE id = ?1 AND status = 'open'`)
+    .prepare(`UPDATE matches SET status = 'finished', finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?1 AND status = 'open'`)
     .bind(match.id)
     .run();
   if (!claim.meta.changes) throw new HttpError(409, "Матч уже завершён");

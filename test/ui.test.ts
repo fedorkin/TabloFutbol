@@ -177,4 +177,28 @@ describe("Mini App", () => {
     expect(ui.$$(".rate .sub").some((d) => d.textContent!.includes("Игрок4"))).toBe(true); // видно, кто это в Telegram
     ui.dom.window.close();
   }, 15000);
+
+  it("игроки: точная оценка через окно правки, в истории — отметка ✎", async () => {
+    const ui = await openApp(1);
+    await ui.until(() => ui.$('[data-tab="ratings"]'), "вкладка игроков");
+    ui.click(ui.$('[data-tab="ratings"]'));
+    await ui.until(() => ui.$$('[data-a="skilledit"]').length === 10, "список игроков");
+    const row = ui.$$(".rate").find((r) => r.textContent!.includes("Игрок8"))!;
+    ui.click(row.querySelector('[data-a="skilledit"]') as HTMLElement);
+    await ui.until(() => ui.$("#skill-input") && ui.text().includes("матч"), "окно правки с историей");
+    (ui.$("#skill-input") as HTMLInputElement).value = "6,3";
+    ui.click(ui.$('[data-a="skillstep"][data-d="0.1"]'));
+    expect((ui.$("#skill-input") as HTMLInputElement).value).toBe("6,4");
+    ui.click(ui.$('[data-a="skill-save"]'));
+    await ui.until(() => !ui.$(".sheet") && row.isConnected === false, "окно закрыто");
+    await ui.until(() => ui.$$(".rate").some((r) => r.textContent!.includes("Игрок8") && r.textContent!.includes("6,4")), "новое значение");
+    const { results } = await env.DB.prepare(`SELECT skill FROM players WHERE first_name = 'Игрок8'`).all<{ skill: number }>();
+    expect(results[0].skill).toBe(6.4);
+
+    // повторно открываем — в истории правка с автором
+    const row2 = ui.$$(".rate").find((r) => r.textContent!.includes("Игрок8"))!;
+    ui.click(row2.querySelector('[data-a="skilledit"]') as HTMLElement);
+    await ui.until(() => ui.text().includes("✎ Игрок1:"), "правка в истории");
+    ui.dom.window.close();
+  }, 15000);
 });

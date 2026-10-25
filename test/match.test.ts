@@ -233,4 +233,23 @@ describe("матч через API", () => {
     expect(pl.matches[0]).toMatchObject({ result: "W", assists: 1, team: "A", score: { A: 2, B: 0 } });
     expect(pl.matches[0].delta).toBeGreaterThan(0);
   });
+
+  it("ручная правка оценки: дробные значения, журнал, схлопывание серии", async () => {
+    const id = B[2];
+    const orig = (await req(ADMIN, "GET", "/players")).json.players.find((p: any) => p.id === id).skill;
+    const edits = async () => (await req(ADMIN, "GET", `/players/${id}/history`)).json.edits;
+    const before = (await edits()).length;
+
+    expect((await req(ADMIN, "PUT", `/players/${id}/skill`, { skill: "6,25" })).json.skill).toBe(6.25);
+    expect((await req(ADMIN, "PUT", `/players/${id}/skill`, { skill: 6.333 })).json.skill).toBe(6.33);
+    expect((await req(ADMIN, "PUT", `/players/${id}/skill`, { skill: "10,5" })).status).toBe(400);
+    let log = await edits();
+    expect(log).toHaveLength(before + 1); // серия правок — одна запись
+    expect(log[0]).toMatchObject({ before: orig, after: 6.33, by: "Игрок1" });
+
+    await req(ADMIN, "PUT", `/players/${id}/skill`, { skill: orig }); // вернули как было — записи нет
+    expect(await edits()).toHaveLength(before);
+
+    expect((await req(2, "GET", `/players/${id}/history`)).json.edits).toBeUndefined(); // журнал — только админам
+  });
 });

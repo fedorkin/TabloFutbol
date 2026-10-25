@@ -90,12 +90,13 @@ export interface PlayerMatchRow {
   ownGoals: number;
   delta: number;
   after: number;
+  at: string; // когда завершён матч (ISO, UTC) — для порядка с ручными правками
 }
 
 export async function playerMatches(db: D1Database, chatId: number, playerId: number): Promise<PlayerMatchRow[]> {
   const { results } = await db
     .prepare(
-      `SELECT rc.*, w.game_date,
+      `SELECT rc.*, w.game_date, coalesce(m.finished_at, w.game_date) AS finished_at,
               (SELECT count(*) FROM match_events e WHERE e.match_id = rc.match_id AND e.cancelled_at IS NULL AND e.team = 'A') AS a,
               (SELECT count(*) FROM match_events e WHERE e.match_id = rc.match_id AND e.cancelled_at IS NULL AND e.team = 'B') AS b
        FROM rating_changes rc
@@ -107,7 +108,7 @@ export async function playerMatches(db: D1Database, chatId: number, playerId: nu
     .bind(chatId, playerId)
     .all<{
       match_id: number; game_date: string; team: Team; result: "W" | "D" | "L"; goals: number; assists: number;
-      own_goals: number; delta: number; after: number; a: number; b: number;
+      own_goals: number; delta: number; after: number; a: number; b: number; finished_at: string;
     }>();
   return results.map((r) => ({
     matchId: r.match_id,
@@ -121,7 +122,74 @@ export async function playerMatches(db: D1Database, chatId: number, playerId: nu
     ownGoals: r.own_goals,
     delta: r.delta,
     after: r.after,
+    // старый формат «YYYY-MM-DD HH:MM:SS» (UTC) → ISO
+    at: r.finished_at.includes("T") ? r.finished_at : r.finished_at.length > 10 ? r.finished_at.replace(" ", "T") + "Z" : r.finished_at,
   }));
+}
+
+export interface SkillEdit {
+  at: string;
+  before: number;
+  after: number;
+  by: string;
+}
+
+export async function skillEdits(db: D1Database, playerId: number): Promise<SkillEdit[]> {
+  const { results } = await db
+    .prepare(`SELECT * FROM skill_edits WHERE player_id = ?1 ORDER BY created_at DESC`)
+    .bind(playerId)
+    .all<{ before: number; after: number; admin_name: string; updated_at: string }>();
+  return results.map((r) => ({ at: r.updated_at, before: r.before, after: r.after, by: r.admin_name }));
+}
+
+/**
+ * Ручная правка оценки. Серия правок одного админа за 3 минуты — одна запись в журнале
+ * (иначе кнопки −/+ насыпали бы десяток строк). Вернули как было — запись удаляется.
+ */
+export async function editSkill(
+  db: D1Database,
+  playerId: number,
+  skill: number,
+  admin: { id: number; name: string },
+): Promise<void> {
+  const current = await db.prepare(`SELECT skill FROM players WHERE id = ?1`).bind(playerId).first<{ skill: number }>();
+  if (!current) return;
+  const last = await db
+    .prepare(
+      `SELECT * FROM skill_edits WHERE player_id = ?1 AND admin_tg_id = ?2
+         AND updated_at >= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-3 minutes')
+       ORDER BY id DESC LIMIT 1`,
+    )
+    .bind(playerId, admin.id)
+    .first<{ id: number; before: number }>();
+  // матч, завершённый после начала серии, разрывает её — иначе в журнале смешается правка и пересчёт
+  const matchSince = last
+    ? await db
+        .prepare(
+          `SELECT 1 AS x FROM rating_changes rc JOIN matches m ON m.id = rc.match_id
+           WHERE rc.player_id = ?1 AND m.finished_at > (SELECT created_at FROM skill_edits WHERE id = ?2)`,
+        )
+        .bind(playerId, last.id)
+        .first()
+    : null;
+
+  const stmts = [db.prepare(`UPDATE players SET skill = ?2 WHERE id = ?1`).bind(playerId, skill)];
+  if (last && !matchSince) {
+    stmts.push(
+      Math.abs(last.before - skill) < 0.001
+        ? db.prepare(`DELETE FROM skill_edits WHERE id = ?1`).bind(last.id)
+        : db
+            .prepare(`UPDATE skill_edits SET after = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?1`)
+            .bind(last.id, skill),
+    );
+  } else if (Math.abs(current.skill - skill) >= 0.001) {
+    stmts.push(
+      db
+        .prepare(`INSERT INTO skill_edits (player_id, before, after, admin_tg_id, admin_name) VALUES (?1, ?2, ?3, ?4, ?5)`)
+        .bind(playerId, current.skill, skill, admin.id, admin.name),
+    );
+  }
+  await db.batch(stmts);
 }
 
 export function renderStats(stats: PlayerSeason[], matches: number): string {

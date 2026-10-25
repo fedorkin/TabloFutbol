@@ -13,7 +13,7 @@ import {
   type Week,
 } from "./db";
 import { refreshWeekMessage } from "./service";
-import { matchList, playerMatches, seasonStats } from "./stats";
+import { editSkill, matchList, playerMatches, seasonStats, skillEdits } from "./stats";
 import { localToday, formatGameDate } from "./dates";
 import { validateInitData } from "./auth";
 import { TEAM_NAMES } from "./teams";
@@ -248,7 +248,8 @@ export function createApi(makeApi: (env: Env) => Api = (env) => new Api(env.BOT_
       id,
       name: playerName(player),
       ...(isAdmin ? { skill: player.skill } : {}),
-      matches: rows.map(({ after, ...r }) => (isAdmin ? { ...r, after } : r)),
+      matches: rows.map(({ after, at, ...r }) => (isAdmin ? { ...r, after, at } : r)),
+      ...(isAdmin ? { edits: await skillEdits(db, id) } : {}),
     });
   });
 
@@ -295,10 +296,15 @@ export function createApi(makeApi: (env: Env) => Api = (env) => new Api(env.BOT_
 
   app.put("/players/:id/skill", async (c) => {
     requireAdmin(c);
-    const { skill } = await c.req.json<{ skill: number }>();
-    if (typeof skill !== "number" || !(skill >= 1 && skill <= 10)) throw new HttpError(400, "Оценка от 1 до 10");
-    await c.env.DB.prepare(`UPDATE players SET skill = ?2 WHERE id = ?1`).bind(Number(c.req.param("id")), skill).run();
-    return c.json({ ok: true });
+    const body = await c.req.json<{ skill: number | string }>();
+    const skill = Math.round(Number(String(body?.skill ?? "").replace(",", ".")) * 100) / 100;
+    if (!(skill >= 1 && skill <= 10)) throw new HttpError(400, "Оценка от 1 до 10");
+    const u = c.var.user;
+    await editSkill(c.env.DB, Number(c.req.param("id")), skill, {
+      id: u.id,
+      name: [u.first_name, u.last_name].filter(Boolean).join(" "),
+    });
+    return c.json({ ok: true, skill });
   });
 
   return app;
