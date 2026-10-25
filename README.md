@@ -41,12 +41,12 @@ npx wrangler secret put BOT_TOKEN        # токен от BotFather
 npx wrangler secret put WEBHOOK_SECRET   # любая длинная строка, напр. `openssl rand -hex 24`
 npm run deploy
 ```
-Wrangler выведет адрес вида `https://soccer-bot.<ваш-аккаунт>.workers.dev`.
+Wrangler выведет адрес вида `https://tablo-futbol.<ваш-аккаунт>.workers.dev`.
 
 ### 3. Подключить webhook
 Откройте в браузере:
 ```
-https://soccer-bot.<ваш-аккаунт>.workers.dev/setup?secret=<WEBHOOK_SECRET>
+https://tablo-futbol.<ваш-аккаунт>.workers.dev/setup?secret=<WEBHOOK_SECRET>
 ```
 Должно вернуться `"ok": true`.
 
