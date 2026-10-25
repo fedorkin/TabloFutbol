@@ -212,6 +212,28 @@ describe("запись на игру", () => {
     expect(sentTo(GROUP)[0].payload.text).toBe("⏰ Игра завтра, а свободно ещё 2 места. Отметьтесь в посте ⬆️");
   });
 
+  it("/name: своё имя, админ — по номеру и ответом, сброс", async () => {
+    await command(7, "/name Костя");
+    expect(sentTo(GROUP).at(-1)!.payload.text).toBe("Теперь в списках: Костя");
+    expect(lastEditText()).toContain("Костя");
+    expect(lastEditText()).not.toContain("Игрок7");
+
+    await command(8, "/name 6 Хакер"); // не админ — нельзя трогать других
+    expect(sentTo(GROUP).at(-1)!.payload.text).toContain("только админы");
+
+    await command(ADMIN, "/name 6 Шестой");
+    expect(sentTo(GROUP).at(-1)!.payload.text).toBe("Теперь в списках: Шестой");
+
+    await command(ADMIN, "/name Девятый", 9); // ответом на сообщение игрока 9
+    expect(lastEditText()).toContain("Девятый");
+
+    await command(7, "/name"); // без имени — подсказка
+    expect(sentTo(GROUP).at(-1)!.payload.text).toContain("Как поменять имя");
+
+    await command(ADMIN, "/name", 7); // админ ответом без имени — сброс
+    expect(sentTo(GROUP).at(-1)!.payload.text).toBe("Вернул имя из Telegram: Игрок7");
+  });
+
   it("/game перепощивает пост вниз и удаляет старый", async () => {
     await command(ADMIN, "/game");
     expect(calls.map((c) => c.method)).toEqual(expect.arrayContaining(["sendMessage", "deleteMessage"]));

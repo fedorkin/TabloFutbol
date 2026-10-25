@@ -124,6 +124,21 @@ describe("матч через API", () => {
     expect((await state(2)).roster[0].skill).toBeUndefined(); // игроки не видят оценок
   });
 
+  it("админ переименовывает игрока, сброс возвращает имя из Telegram", async () => {
+    const { json } = await req(ADMIN, "GET", "/players");
+    const p3 = json.players.find((p: any) => p.name === "Игрок3");
+    expect((await req(2, "PUT", `/players/${p3.id}/name`, { name: "Вася" })).status).toBe(403);
+    const r = await req(ADMIN, "PUT", `/players/${p3.id}/name`, { name: "  Вася   Пупкин \n" });
+    expect(r.json.name).toBe("Вася Пупкин");
+    const after = (await req(ADMIN, "GET", "/players")).json.players.find((p: any) => p.id === p3.id);
+    expect(after).toMatchObject({ name: "Вася Пупкин", tgName: "Игрок3", renamed: true });
+    expect((await state()).roster.find((p: any) => p.id === p3.id).name).toBe("Вася Пупкин");
+    // новый вход из Telegram не затирает заданное имя
+    await req(3, "GET", "/state");
+    expect((await state()).roster.find((p: any) => p.id === p3.id).name).toBe("Вася Пупкин");
+    expect((await req(ADMIN, "PUT", `/players/${p3.id}/name`, { name: null })).json.name).toBe("Игрок3");
+  });
+
   it("админ собирает команды 5×5 с минимальной разницей", async () => {
     expect((await req(2, "POST", "/teams/auto", { mode: "best" })).status).toBe(403);
     const r = await req(ADMIN, "POST", "/teams/auto", { mode: "best" });

@@ -231,3 +231,20 @@ export function changeLimit(db: D1Database, week: Week, limit: number): Promise<
     return { changed: true, promoted: a.results.map((r) => r.player_id).filter((id) => !beforeIds.has(id)) };
   });
 }
+
+// ---------- имена ----------
+
+/** Чистит имя: без управляющих символов, одиночные пробелы, до 40 символов. Пустое → null. */
+export function cleanName(raw: string): string | null {
+  const s = raw.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 40);
+  return s || null;
+}
+
+/** Своё имя в списках вместо ника из Telegram. null — вернуть имя из Telegram. */
+export async function setDisplayName(db: D1Database, playerId: number, name: string | null): Promise<void> {
+  await db.prepare(`UPDATE players SET display_name = ?2 WHERE id = ?1`).bind(playerId, name).run();
+}
+
+export async function getPlayerByTgId(db: D1Database, tgId: number): Promise<Player | null> {
+  return db.prepare(`SELECT * FROM players WHERE tg_id = ?1`).bind(tgId).first<Player>();
+}

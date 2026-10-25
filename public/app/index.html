@@ -59,7 +59,10 @@
   .chip { display: flex; justify-content: space-between; align-items: center; width: 100%; border: 0; background: var(--bg); color: var(--text); border-radius: 10px; padding: 9px 10px; margin-bottom: 6px; font: inherit; font-size: 15px; text-align: left; }
   .chip small { color: var(--hint); }
   .rate { display: flex; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--bg2); }
-  .rate .name { flex: 1; } .rate .val { width: 36px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .rate .name { flex: 1; }
+  .rate .nm { border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; padding: 0; }
+  .rate .sub { color: var(--hint); font-size: 13px; }
+  .input { width: 100%; font: inherit; font-size: 17px; padding: 12px; border-radius: 12px; border: 1px solid var(--bg2); background: var(--bg2); color: var(--text); } .rate .val { width: 36px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
   .rate button { width: 40px; height: 40px; border: 0; border-radius: 10px; background: var(--bg2); color: var(--text); font-size: 20px; }
   .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: flex-end; z-index: 10; }
   .sheet { background: var(--bg); width: 100%; max-height: 85vh; overflow: auto; border-radius: 18px 18px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
@@ -216,6 +219,16 @@
     skillTimers[id] = setTimeout(() => api("PUT", `/players/${id}/skill`, { skill: p.skill }).catch((e) => toast(e.message)), 500);
   }
 
+  async function saveName(id, name) {
+    try {
+      const r = await api("PUT", `/players/${id}/name`, { name });
+      const p = S.players.find((x) => x.id === id);
+      if (p) { p.name = r.name; p.renamed = !!name; }
+      S.sheet = null; haptic("success"); toast("Имя сохранено");
+    } catch (e) { toast(e.message); haptic("error"); }
+    render(); load();
+  }
+
   // ---------- отрисовка ----------
   function events() {
     const m = M(); if (!m) return [];
@@ -317,13 +330,15 @@
 
   function ratingsView() {
     if (!S.players) { loadPlayers(); return `<div class="empty">Загрузка…</div>`; }
-    return `<p class="muted">Оценка 1–10 для деления на команды. Видят только админы.</p>
-      ${S.players.map((p) => `<div class="rate"><span class="name">${esc(p.name)}${p.guest ? ' <span class="muted">гость</span>' : ""}</span>
+    return `<p class="muted">Оценка 1–10 для деления на команды — видят только админы. Нажмите на имя, чтобы переименовать.</p>
+      ${S.players.map((p) => `<div class="rate"><button class="name nm" data-a="rename" data-id="${p.id}">${esc(p.name)} ✎
+          <div class="sub">${p.guest ? "гость" : esc([p.renamed ? p.tgName : "", p.username ? "@" + p.username : ""].filter(Boolean).join(" · "))}</div></button>
         <button data-a="skill" data-id="${p.id}" data-d="-1">−</button><span class="val">${p.skill}</span><button data-a="skill" data-id="${p.id}" data-d="1">+</button></div>`).join("")}`;
   }
 
   function sheetView() {
-    const m = M(); if (!S.sheet || !m) return "";
+    const m = M(); if (!S.sheet) return "";
+    if (S.sheet.kind !== "rename" && !m) return "";
     if (S.sheet.kind === "assist") {
       const scorer = P(S.sheet.scorerId); if (!scorer) return "";
       const mates = m.players.filter((p) => p.team === scorer.team && p.id !== scorer.id);
@@ -331,6 +346,16 @@
         <h3>⚽ ${esc(scorer.name)} — кто отдал пас?</h3>
         <div class="grid">${mates.map((p) => `<button class="pbtn ${scorer.team}" data-a="assist" data-id="${p.id}">${esc(p.name)}</button>`).join("")}</div>
         <button class="btn" data-a="assist" data-id="">Без паса</button>
+        <button class="btn ghost" data-a="close">Отмена</button></div></div>`;
+    }
+    if (S.sheet.kind === "rename") {
+      const p = (S.players || []).find((x) => x.id === S.sheet.id); if (!p) return "";
+      return `<div class="sheet-bg" data-a="close"><div class="sheet" data-stop>
+        <h3>Как показывать игрока?</h3>
+        ${p.guest ? "" : `<p class="muted">В Telegram: ${esc(p.tgName || "")}${p.username ? " · @" + esc(p.username) : ""}</p>`}
+        <input class="input" id="rename-input" maxlength="40" value="${esc(p.name)}" autocomplete="off">
+        <button class="btn" data-a="rename-save">Сохранить</button>
+        ${!p.guest && p.renamed ? `<button class="btn ghost" data-a="rename-reset">Вернуть имя из Telegram</button>` : ""}
         <button class="btn ghost" data-a="close">Отмена</button></div></div>`;
     }
     if (S.sheet.kind === "own") {
@@ -351,13 +376,19 @@
     const d = S.data;
     if (!d.game) { app.innerHTML = `<div class="empty">Ближайшей игры нет.<br>Админ создаёт запись командой /game</div>`; return; }
     if (S.tab === "ratings" && !d.me.isAdmin) S.tab = "board";
-    const tabs = [["board", "Табло"], ["teams", "Составы"], ...(d.me.isAdmin ? [["ratings", "Рейтинги"]] : [])];
+    const tabs = [["board", "Табло"], ["teams", "Составы"], ...(d.me.isAdmin ? [["ratings", "Игроки"]] : [])];
     app.innerHTML = `${scoreView()}
       <div class="tabs">${tabs.map(([k, l]) => `<button data-a="tab" data-tab="${k}" class="${S.tab === k ? "on" : ""}">${l}</button>`).join("")}</div>
       ${S.queue.length ? `<div class="muted center">⏳ Не отправлено: ${S.queue.length} — отправлю, как появится связь</div>` : ""}
       ${S.tab === "board" ? boardView() : S.tab === "teams" ? teamsView() : ratingsView()}`;
-    document.getElementById("sheet").innerHTML = sheetView();
+    // шторку с полем ввода не перерисовываем при поллинге — иначе пропадёт набранный текст и клавиатура
+    const key = S.sheet ? JSON.stringify(S.sheet) : "";
+    if (!(S.sheet && S.sheet.kind === "rename" && key === renderedSheet)) {
+      document.getElementById("sheet").innerHTML = sheetView();
+      renderedSheet = key;
+    }
   }
+  let renderedSheet = "";
 
   // ---------- обработчики (делегирование) ----------
   document.addEventListener("click", (ev) => {
@@ -377,12 +408,26 @@
       case "auto": adminCall("POST", "/teams/auto", { mode: el.dataset.mode }, "Команды собраны").then(() => { S.tab = "teams"; render(); }); break;
       case "move": moveTo(Number(id), el.dataset.to); break;
       case "skill": setSkill(Number(id), Number(el.dataset.d)); break;
+      case "rename":
+        S.sheet = { kind: "rename", id: Number(id) }; render();
+        setTimeout(() => { const i = document.getElementById("rename-input"); if (i) { i.focus(); i.select(); } }, 50);
+        break;
+      case "rename-save": {
+        const v = (document.getElementById("rename-input").value || "").trim();
+        if (!v) { toast("Введите имя"); break; }
+        saveName(S.sheet.id, v); break;
+      }
+      case "rename-reset": saveName(S.sheet.id, null); break;
       case "finish":
         if (S.queue.length) { toast("Сначала дождитесь отправки голов"); break; }
         confirmBox("Завершить матч и отправить итог в группу?").then((ok) => ok && adminCall("POST", "/finish", undefined, "Итог отправлен в группу"));
         break;
       case "reopen": adminCall("POST", "/reopen"); break;
     }
+  });
+
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && ev.target.id === "rename-input") { ev.preventDefault(); document.querySelector('[data-a="rename-save"]').click(); }
   });
 
   // ---------- старт ----------

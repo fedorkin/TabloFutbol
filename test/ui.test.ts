@@ -143,4 +143,23 @@ describe("Mini App", () => {
     expect(results.length).toBeGreaterThanOrEqual(1);
     ui.dom.window.close();
   });
+
+  it("игроки: переименование через шторку", async () => {
+    const ui = await openApp(1);
+    await ui.until(() => ui.$('[data-tab="ratings"]'), "вкладка игроков");
+    expect(ui.$('[data-tab="ratings"]')!.textContent).toBe("Игроки");
+    ui.click(ui.$('[data-tab="ratings"]'));
+    await ui.until(() => ui.$$('[data-a="rename"]').length === 10, "список игроков");
+    const target = ui.$$('[data-a="rename"]').find((b) => b.textContent!.includes("Игрок4"))!;
+    ui.click(target);
+    await ui.until(() => ui.$("#rename-input"), "поле имени");
+    const input = ui.$("#rename-input") as HTMLInputElement;
+    input.value = "Четвёртый";
+    await new Promise((r) => setTimeout(r, 3300)); // поллинг не должен затереть ввод
+    expect((ui.$("#rename-input") as HTMLInputElement).value).toBe("Четвёртый");
+    ui.click(ui.$('[data-a="rename-save"]'));
+    await ui.until(() => ui.$$('[data-a="rename"]').some((b) => b.textContent!.includes("Четвёртый")) && !ui.$(".sheet"), "новое имя в списке");
+    expect(ui.$$(".rate .sub").some((d) => d.textContent!.includes("Игрок4"))).toBe(true); // видно, кто это в Telegram
+    ui.dom.window.close();
+  }, 15000);
 });

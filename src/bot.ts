@@ -12,6 +12,10 @@ import {
   setResponse,
   updateWeek,
   upsertTgPlayer,
+  cleanName,
+  playerName,
+  setDisplayName,
+  type Player,
   type Week,
 } from "./db";
 import { localToday, nextGameDate } from "./dates";
@@ -23,6 +27,7 @@ import { InlineKeyboard } from "grammy";
 const HELP = `<b>Команды</b>
 /list — текущий состав
 /chatid — id этого чата
+/name Имя — как вас показывать в списках
 
 <b>Для админов группы</b>
 /game — опубликовать (или перепостить вниз) запись на ближайшую игру
@@ -30,6 +35,7 @@ const HELP = `<b>Команды</b>
 /limit 12 — изменить число мест
 /add Имя — добавить игрока без Telegram (или ответом на сообщение игрока)
 /remove 7 — убрать игрока №7 из списка (или ответом на его сообщение)
+/name 7 Вася — переименовать игрока №7 (или ответом на его сообщение)
 /teams — поделить основу на две команды по рейтингу
 /tablo — кнопка открытия табло (счёт, составы, рейтинги)`;
 
@@ -203,6 +209,52 @@ export function createBot(env: Env, botInfo?: UserFromGetMe): Bot {
     }),
   );
 
+  /**
+   * /name Вася — своё имя;
+   * админ: ответом на сообщение игрока «/name Вася» или «/name 7 Вася» (номер из списка);
+   * /name без имени (ответом или с номером — у админа) — вернуть имя из Telegram.
+   */
+  bot.command("name", async (ctx) => {
+    if (!(await checkGroup(ctx))) return;
+    const text = String(ctx.match ?? "").trim();
+    const replyFrom = ctx.message?.reply_to_message?.from;
+    const byNumber = /^(\d{1,3})(?:\s+(.*))?$/.exec(text);
+    const targetsOther = (replyFrom && !replyFrom.is_bot && replyFrom.id !== ctx.from?.id) || byNumber;
+
+    let playerId: number | undefined;
+    let newName: string | null;
+    if (targetsOther) {
+      if (!(await isAdmin(ctx))) return ctx.reply("Переименовывать других могут только админы. Своё имя: /name Имя");
+      if (replyFrom && !byNumber) {
+        playerId = (await upsertTgPlayer(db, replyFrom)).id;
+        newName = cleanName(text);
+      } else {
+        const week = await getCurrentWeek(db, cfg.groupChatId, today());
+        const roster = week ? await getRoster(db, week) : null;
+        playerId = (roster && [...roster.main, ...roster.waitlist].find((e) => e.pos === Number(byNumber![1]))?.playerId) ?? undefined;
+        if (!playerId) return ctx.reply("Нет игрока с таким номером в текущем списке.");
+        newName = cleanName(byNumber![2] ?? "");
+      }
+    } else {
+      if (!ctx.from || !text) {
+        return ctx.reply(
+          "Как поменять имя в списках:\n/name Павел — своё\nАдмины: ответом на сообщение игрока /name Павел, или /name 7 Павел — по номеру в списке.\nБез имени — вернуть имя из Telegram.",
+        );
+      }
+      playerId = (await upsertTgPlayer(db, ctx.from)).id;
+      newName = cleanName(text);
+    }
+
+    const player = await db.prepare(`SELECT * FROM players WHERE id = ?1`).bind(playerId).first<Player>();
+    if (!player) return;
+    if (!newName && player.tg_id == null) return ctx.reply("У гостя нет имени в Telegram — укажите новое имя.");
+    await setDisplayName(db, player.id, newName);
+    const shown = playerName({ ...player, display_name: newName });
+    const week = await getCurrentWeek(db, cfg.groupChatId, today());
+    if (week) await refreshWeekMessage(ctx.api, db, week, cfg);
+    await ctx.reply(newName ? `Теперь в списках: ${esc(shown)}` : `Вернул имя из Telegram: ${esc(shown)}`, { parse_mode: "HTML" });
+  });
+
   const tabloKeyboard = (ctx: Context) =>
     new InlineKeyboard().url("📲 Открыть табло", `https://t.me/${ctx.me.username}?startapp=tablo`);
 
@@ -241,6 +293,7 @@ export const BOT_COMMANDS = [
   { command: "limit", description: "Число мест, напр. /limit 12 (админ)" },
   { command: "add", description: "Добавить игрока (админ)" },
   { command: "remove", description: "Убрать игрока по номеру (админ)" },
+  { command: "name", description: "Своё имя в списках, напр. /name Павел" },
   { command: "tablo", description: "Открыть табло" },
   { command: "teams", description: "Поделить на команды (админ)" },
   { command: "help", description: "Справка" },

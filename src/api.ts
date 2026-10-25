@@ -1,7 +1,18 @@
 import { Hono, type Context } from "hono";
 import { Api } from "grammy";
 import { readConfig, type Config, type Env } from "./env";
-import { getCurrentWeek, getRoster, playerName, upsertTgPlayer, type Player, type TgUser, type Week } from "./db";
+import {
+  cleanName,
+  getCurrentWeek,
+  getRoster,
+  playerName,
+  setDisplayName,
+  upsertTgPlayer,
+  type Player,
+  type TgUser,
+  type Week,
+} from "./db";
+import { refreshWeekMessage } from "./service";
 import { localToday, formatGameDate } from "./dates";
 import { validateInitData } from "./auth";
 import { TEAM_NAMES } from "./teams";
@@ -179,10 +190,39 @@ export function createApi(makeApi: (env: Env) => Api = (env) => new Api(env.BOT_
     const { results } = await c.env.DB.prepare(`SELECT * FROM players`).all<Player & { skill: number }>();
     return c.json({
       players: results
-        .map((p) => ({ id: p.id, name: playerName(p), skill: p.skill, guest: p.tg_id == null }))
+        .map((p) => ({
+          id: p.id,
+          name: playerName(p),
+          skill: p.skill,
+          guest: p.tg_id == null,
+          // как игрок подписан в Telegram — чтобы понять, кто это, при переименовании
+          tgName: p.tg_id == null ? null : [p.first_name, p.last_name].filter(Boolean).join(" "),
+          username: p.username,
+          renamed: p.tg_id != null && !!p.display_name,
+        }))
         .sort((a, b) => a.name.localeCompare(b.name, "ru")),
     });
   });
+
+  app.put("/players/:id/name", async (c) => {
+    requireAdmin(c);
+    const { name } = await c.req.json<{ name: string | null }>();
+    const id = Number(c.req.param("id"));
+    const player = await c.env.DB.prepare(`SELECT * FROM players WHERE id = ?1`).bind(id).first<Player>();
+    if (!player) throw new HttpError(404, "Игрок не найден");
+    const clean = cleanName(String(name ?? ""));
+    // у гостя нет имени из Telegram — сбросить нельзя
+    if (!clean && player.tg_id == null) throw new HttpError(400, "Введите имя");
+    await setDisplayName(c.env.DB, id, clean);
+    await refreshCurrentPost(c);
+    return c.json({ ok: true, name: clean ?? playerName({ ...player, display_name: null }) });
+  });
+
+  /** Пост записи в группе показывает имена — перерисовываем после переименования. */
+  const refreshCurrentPost = async (c: C) => {
+    const week = await getCurrentWeek(c.env.DB, c.var.cfg.groupChatId, localToday(new Date(), c.var.cfg.timezone).date);
+    if (week) await refreshWeekMessage(c.var.api, c.env.DB, week, c.var.cfg).catch(() => {});
+  };
 
   app.put("/players/:id/skill", async (c) => {
     requireAdmin(c);
