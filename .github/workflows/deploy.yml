@@ -72,6 +72,8 @@ jobs:
           for i in 1 2 3 4 5; do
             if curl -fsS "$WORKER_URL/setup?secret=$WEBHOOK_SECRET" -o setup.json; then
               jq '{ok, webhook, pending: .info.pending_update_count, last_error: .info.last_error_message}' setup.json
+              echo "::notice title=Telegram webhook::$(jq -r '"ok=\(.ok) pending=\(.info.pending_update_count) last_error=\(.info.last_error_message // "нет")"' setup.json)"
+              echo "::notice title=GROUP_CHAT_ID::$GROUP_CHAT_ID"
               exit 0
             fi
             sleep 5

@@ -40,6 +40,19 @@ export function createBot(env: Env, botInfo?: UserFromGetMe): Bot {
   const today = () => localToday(new Date(), cfg.timezone).date;
   const inGroup = (ctx: Context) => ctx.chat?.id === cfg.groupChatId;
 
+  /** В нашей группе — true. В чужом/ненастроенном чате подсказывает, какой id прописать. */
+  async function checkGroup(ctx: Context): Promise<boolean> {
+    if (inGroup(ctx)) return true;
+    if (ctx.chat && ctx.chat.type !== "private") {
+      await ctx.reply(
+        `Бот привязан к другому чату (GROUP_CHAT_ID = <code>${cfg.groupChatId}</code>).\n` +
+          `id этого чата: <code>${ctx.chat.id}</code> — пропишите его в GROUP_CHAT_ID.`,
+        { parse_mode: "HTML" },
+      );
+    }
+    return false;
+  }
+
   async function isAdmin(ctx: Context): Promise<boolean> {
     if (!ctx.chat || !ctx.from) return false;
     if (ctx.message?.sender_chat?.id === ctx.chat.id || ctx.from.id === GROUP_ANONYMOUS_BOT) return true;
@@ -50,7 +63,7 @@ export function createBot(env: Env, botInfo?: UserFromGetMe): Bot {
   /** Обёртка для админ-команд: только в нашей группе и только от админов. */
   function admin(handler: (ctx: Context, week: Week | null) => Promise<unknown>) {
     return async (ctx: Context) => {
-      if (!inGroup(ctx)) return;
+      if (!(await checkGroup(ctx))) return;
       if (!(await isAdmin(ctx))) {
         await ctx.reply("Эта команда только для админов группы.");
         return;
@@ -75,7 +88,7 @@ export function createBot(env: Env, botInfo?: UserFromGetMe): Bot {
   bot.command("chatid", (ctx) => ctx.reply(`chat id: <code>${ctx.chat.id}</code>`, { parse_mode: "HTML" }));
 
   bot.command("list", async (ctx) => {
-    if (!inGroup(ctx)) return;
+    if (!(await checkGroup(ctx))) return;
     const week = await getCurrentWeek(db, cfg.groupChatId, today());
     if (!week) return noGame(ctx);
     await ctx.reply(renderRosterText(week, await getRoster(db, week), cfg), { parse_mode: "HTML" });
