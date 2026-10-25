@@ -8,7 +8,8 @@ printf '%s\n' "$out"
 cat "$errf" >&2
 if [ $code -ne 0 ]; then
   msg=$(printf '%s\n%s' "$out" "$(cat "$errf")" | sed 's/\x1b\[[0-9;]*m//g; s/\r//g' \
-    | grep -v '^[[:space:]]*$' | tail -n 12 | sed 's/%/%25/g' | tr '\n' ' ')
+    | grep -iE 'error|✘|failed|code: ' | tail -n 6 | sed 's/%/%25/g' | tr '\n' ' ')
+  # Только строки с ошибкой: репозиторий публичный, а в остальном выводе wrangler есть имя аккаунта
   # stderr, чтобы аннотация не потерялась, если stdout перехвачен через $(...)
   echo "::error title=$*::$msg" >&2
 fi
