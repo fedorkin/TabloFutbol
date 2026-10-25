@@ -21,6 +21,7 @@ import {
 import { localToday, nextGameDate } from "./dates";
 import { esc, renderRosterText } from "./render";
 import { notifyPromoted, postWeek, refreshWeekMessage } from "./service";
+import { matchList, renderStats, seasonStats } from "./stats";
 import { autoTeams, getLineup, getMatchByWeek, HttpError, renderLineups } from "./match";
 import { InlineKeyboard } from "grammy";
 
@@ -28,6 +29,7 @@ const HELP = `<b>Команды</b>
 /list — текущий состав
 /chatid — id этого чата
 /name Имя — как вас показывать в списках
+/stats — голы, пасы и результаты за сезон
 
 <b>Для админов группы</b>
 /game — опубликовать (или перепостить вниз) запись на ближайшую игру
@@ -255,6 +257,15 @@ export function createBot(env: Env, botInfo?: UserFromGetMe): Bot {
     await ctx.reply(newName ? `Теперь в списках: ${esc(shown)}` : `Вернул имя из Telegram: ${esc(shown)}`, { parse_mode: "HTML" });
   });
 
+  bot.command("stats", async (ctx) => {
+    if (!(await checkGroup(ctx))) return;
+    const [stats, matches] = await Promise.all([seasonStats(db, cfg.groupChatId), matchList(db, cfg.groupChatId)]);
+    await ctx.reply(renderStats(stats, matches.filter((m) => m.status === "finished").length), {
+      parse_mode: "HTML",
+      reply_markup: tabloKeyboard(ctx),
+    });
+  });
+
   const tabloKeyboard = (ctx: Context) =>
     new InlineKeyboard().url("📲 Открыть табло", `https://t.me/${ctx.me.username}?startapp=tablo`);
 
@@ -295,6 +306,7 @@ export const BOT_COMMANDS = [
   { command: "remove", description: "Убрать игрока по номеру (админ)" },
   { command: "name", description: "Своё имя в списках, напр. /name Павел" },
   { command: "tablo", description: "Открыть табло" },
+  { command: "stats", description: "Статистика: голы, пасы, победы" },
   { command: "teams", description: "Поделить на команды (админ)" },
   { command: "help", description: "Справка" },
 ];

@@ -125,6 +125,20 @@ describe("Mini App", () => {
     ui.click(ui.$('[data-a="finish"]'));
     await ui.until(() => ui.text().includes("Матч завершён"), "матч завершён");
 
+    // История: карточка матча и таблица статистики
+    ui.click(ui.$('[data-tab="history"]'));
+    await ui.until(() => ui.$$('[data-a="match"]').length === 1, "матч в истории");
+    expect(ui.$('[data-a="match"]')!.textContent).toContain("0 : 1");
+    ui.click(ui.$('[data-a="match"]'));
+    await ui.until(() => ui.$(".sheet .score") && ui.$$(".sheet .feed li").length === 1, "карточка матча");
+    expect(ui.$$(".sheet .chip small").length).toBe(10); // у всех изменение рейтинга
+    ui.click(ui.$('.sheet [data-a="close"].btn'));
+    ui.click(ui.$('[data-a="hist"][data-v="stats"]'));
+    await ui.until(() => ui.$$('tr[data-a="player"]').length === 10, "таблица статистики");
+    ui.click(ui.$$('tr[data-a="player"]')[0]);
+    await ui.until(() => ui.$(".sheet") && ui.text().includes("1 игр"), "карточка игрока");
+    ui.click(ui.$('.sheet [data-a="close"].btn'));
+
     ui.dom.window.close();
     phone2.dom.window.close();
   });
@@ -134,12 +148,13 @@ describe("Mini App", () => {
     await ui.until(() => ui.$('[data-tab="ratings"]'), "вкладка рейтингов");
     ui.click(ui.$('[data-tab="ratings"]'));
     await ui.until(() => ui.$$(".rate").length === 10, "список рейтингов");
-    const plus = ui.$$('.rate [data-d="1"]')[0];
-    ui.click(plus);
+    const start = Number(ui.$$(".rate .val")[0].textContent!.replace(",", "."));
+    const target = Math.min(10, Math.round((start + 2) * 100) / 100);
     ui.click(ui.$$('.rate [data-d="1"]')[0]);
-    expect(ui.$$(".rate .val")[0].textContent).toBe("7");
+    ui.click(ui.$$('.rate [data-d="1"]')[0]);
+    expect(ui.$$(".rate .val")[0].textContent).toBe(String(target).replace(".", ","));
     await new Promise((r) => setTimeout(r, 700)); // дебаунс сохранения
-    const { results } = await env.DB.prepare(`SELECT skill FROM players WHERE skill = 7`).all();
+    const { results } = await env.DB.prepare(`SELECT skill FROM players WHERE skill = ?1`).bind(target).all();
     expect(results.length).toBeGreaterThanOrEqual(1);
     ui.dom.window.close();
   });

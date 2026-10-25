@@ -178,7 +178,8 @@ describe("матч через API", () => {
     expect((await state()).match.score).toEqual({ A: 2, B: 0 });
   });
 
-  it("завершение отправляет итог в группу и закрывает матч", async () => {
+  it("завершение: итог в группу, рейтинг меняется, повтор — 409, «открыть снова» откатывает", async () => {
+    const skillsBefore = Object.fromEntries((await req(ADMIN, "GET", "/players")).json.players.map((p: any) => [p.id, p.skill]));
     calls = [];
     expect((await req(2, "POST", "/finish")).status).toBe(403);
     expect((await req(ADMIN, "POST", "/finish")).status).toBe(200);
@@ -188,13 +189,48 @@ describe("матч через API", () => {
     expect(msg.text).toContain("🔵 Синие 2 : 0 Оранжевые 🟠");
     expect(msg.text).toContain(`Игрок${A[0]} — 1 ⚽`);
     expect(msg.text).toContain("Автоголы:");
+    expect(msg.text).toContain("📈 Рейтинг");
     expect((await state()).match.status).toBe("finished");
     expect((await req(2, "POST", "/events", { id: "late-0001", type: "goal", scorerId: B[1] })).status).toBe(409);
+    expect((await req(ADMIN, "POST", "/finish")).status).toBe(409); // двойной тап не пересчитывает рейтинг
+
+    const skillsAfter = Object.fromEntries((await req(ADMIN, "GET", "/players")).json.players.map((p: any) => [p.id, p.skill]));
+    const winners = A.slice(1); // синие после ручной правки составов
+    for (const id of winners) {
+      if (skillsBefore[id] < 10) expect(skillsAfter[id]).toBeGreaterThan(skillsBefore[id]);
+      else expect(skillsAfter[id]).toBe(10); // потолок шкалы
+    }
+    expect(skillsAfter[B[1]]).toBeLessThan(skillsBefore[B[1]]);
 
     expect((await req(ADMIN, "POST", "/reopen")).status).toBe(200);
     expect((await state()).match.status).toBe("open");
+    const skillsReverted = Object.fromEntries((await req(ADMIN, "GET", "/players")).json.players.map((p: any) => [p.id, p.skill]));
+    expect(skillsReverted).toEqual(skillsBefore);
+
     calls = [];
     await req(ADMIN, "POST", "/finish");
     expect(calls.map((c) => c.method)).toEqual(expect.arrayContaining(["deleteMessage", "sendMessage"])); // старый итог заменён
+  });
+
+  it("история, статистика и карточка игрока", async () => {
+    const h = (await req(2, "GET", "/history")).json;
+    expect(h.matches).toHaveLength(1);
+    expect(h.matches[0]).toMatchObject({ status: "finished", score: { A: 2, B: 0 }, title: "четверг, 29 октября" });
+    expect(h.stats).toHaveLength(10);
+    expect(h.stats[0].skill).toBeUndefined(); // игроки не видят оценок
+    const top = h.stats.find((p: any) => p.id === A[0]);
+    expect(top).toMatchObject({ games: 1, goals: 1, assists: 0 });
+    expect(h.stats.reduce((s: number, p: any) => s + p.wins, 0)).toBe(4);
+
+    const m = (await req(2, "GET", `/history/${h.matches[0].id}`)).json;
+    expect(m.events).toHaveLength(2); // отменённый гол не показываем
+    expect(m.ratings).toHaveLength(10);
+    expect(m.ratings[0].after).toBeUndefined();
+    expect((await req(ADMIN, "GET", `/history/${h.matches[0].id}`)).json.ratings[0].after).toBeTypeOf("number");
+
+    const pl = (await req(2, "GET", `/players/${A[1]}/history`)).json;
+    expect(pl.matches).toHaveLength(1);
+    expect(pl.matches[0]).toMatchObject({ result: "W", assists: 1, team: "A", score: { A: 2, B: 0 } });
+    expect(pl.matches[0].delta).toBeGreaterThan(0);
   });
 });

@@ -62,7 +62,7 @@
   .rate .name { flex: 1; }
   .rate .nm { border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; padding: 0; }
   .rate .sub { color: var(--hint); font-size: 13px; }
-  .input { width: 100%; font: inherit; font-size: 17px; padding: 12px; border-radius: 12px; border: 1px solid var(--bg2); background: var(--bg2); color: var(--text); } .rate .val { width: 36px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .input { width: 100%; font: inherit; font-size: 17px; padding: 12px; border-radius: 12px; border: 1px solid var(--bg2); background: var(--bg2); color: var(--text); } .rate .val { width: 52px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }
   .rate button { width: 40px; height: 40px; border: 0; border-radius: 10px; background: var(--bg2); color: var(--text); font-size: 20px; }
   .sheet-bg { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: flex-end; z-index: 10; }
   .sheet { background: var(--bg); width: 100%; max-height: 85vh; overflow: auto; border-radius: 18px 18px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); }
@@ -71,6 +71,16 @@
   .toast button { border: 0; background: transparent; color: #8ab4ff; font: inherit; font-weight: 600; margin-left: auto; }
   .banner { background: var(--bg2); border-radius: 12px; padding: 12px; margin-top: 12px; font-size: 14px; }
   .empty { padding: 32px 8px; text-align: center; color: var(--hint); }
+  .card { display: flex; align-items: center; width: 100%; border: 0; background: var(--bg2); color: var(--text); border-radius: 12px; padding: 12px; margin-bottom: 8px; font: inherit; text-align: left; }
+  .card .grow { flex: 1; }
+  .card .sc { font-weight: 700; font-variant-numeric: tabular-nums; }
+  table.st { width: 100%; border-collapse: collapse; font-size: 14px; font-variant-numeric: tabular-nums; }
+  table.st th { color: var(--hint); font-weight: 500; text-align: right; padding: 6px 4px; font-size: 12px; }
+  table.st td { text-align: right; padding: 9px 4px; border-bottom: 1px solid var(--bg2); }
+  table.st th:nth-child(2), table.st td:nth-child(2) { text-align: left; }
+  table.st tr[data-a] { cursor: pointer; }
+  .up { color: #2ea043; } .down { color: var(--danger); }
+  .spark { width: 100%; height: 70px; display: block; margin: 8px 0; }
 </style>
 </head>
 <body>
@@ -97,6 +107,8 @@
     queue: store.get("queue", []),      // офлайн-очередь: {kind:"event", body} | {kind:"cancel", id}
     sheet: null,                        // {kind:"assist", scorerId} | {kind:"own"}
     players: null,                      // рейтинги (админ)
+    history: null,                      // {matches, stats}
+    histView: "matches",                // "matches" | "stats"
     busy: false,
   };
 
@@ -170,7 +182,7 @@
   // ---------- действия ----------
   const M = () => S.data && S.data.match;
   const P = (id) => (M() ? M().players.find((p) => p.id === id) : null);
-  const name = (id) => (P(id) ? P(id).name : "?");
+  const name = (id) => (P(id) ? P(id).name : (M() && M().names && M().names[id]) || "?");
 
   function addEvent(body) {
     body.id = uid();
@@ -214,7 +226,7 @@
   const skillTimers = {};
   function setSkill(id, delta) {
     const p = S.players.find((x) => x.id === id); if (!p) return;
-    p.skill = Math.max(1, Math.min(10, p.skill + delta)); tap(); render();
+    p.skill = Math.round(Math.max(1, Math.min(10, p.skill + delta)) * 100) / 100; tap(); render();
     clearTimeout(skillTimers[id]);
     skillTimers[id] = setTimeout(() => api("PUT", `/players/${id}/skill`, { skill: p.skill }).catch((e) => toast(e.message)), 500);
   }
@@ -304,7 +316,7 @@
     const d = S.data, m = M(), admin = d.me.isAdmin;
     if (!m) {
       return `<h2>Основной состав (${d.roster.length})</h2>
-        ${d.roster.map((p) => `<div class="chip">${esc(p.name)}${admin ? `<small>${p.skill}</small>` : ""}</div>`).join("") || `<div class="muted">Пока никто не записался</div>`}
+        ${d.roster.map((p) => `<div class="chip">${esc(p.name)}${admin ? `<small>${fmtSkill(p.skill)}</small>` : ""}</div>`).join("") || `<div class="muted">Пока никто не записался</div>`}
         ${admin ? `<button class="btn" data-a="auto" data-mode="best" ${d.roster.length < 2 ? "disabled" : ""}>⚖️ Собрать команды по рейтингу</button>` : ""}`;
     }
     const inTeams = new Set(m.players.map((p) => p.id));
@@ -312,9 +324,9 @@
     const col = (t) => {
       const ps = m.players.filter((p) => p.team === t);
       const sum = ps.reduce((s, p) => s + (p.skill || 0), 0);
-      return `<div class="col ${t}"><h3><span>${esc(d.teamNames[t])}</span><span class="muted">${ps.length}${admin ? ` · Σ${sum}` : ""}</span></h3>
+      return `<div class="col ${t}"><h3><span>${esc(d.teamNames[t])}</span><span class="muted">${ps.length}${admin ? ` · Σ${fmtSkill(sum)}` : ""}</span></h3>
         ${ps.map((p) => admin
-          ? `<button class="chip" data-a="move" data-id="${p.id}" data-to="${other(t)}">${esc(p.name)}<small>${p.skill} ⇄</small></button>`
+          ? `<button class="chip" data-a="move" data-id="${p.id}" data-to="${other(t)}">${esc(p.name)}<small>${fmtSkill(p.skill)} ⇄</small></button>`
           : `<div class="chip">${esc(p.name)}</div>`).join("")}</div>`;
     };
     return `<div class="cols">${col("A")}${col("B")}</div>
@@ -328,17 +340,93 @@
       ${admin && m.status === "open" ? `<div class="row"><button class="btn ghost" data-a="auto" data-mode="shuffle">🎲 Другой вариант</button><button class="btn ghost" data-a="auto" data-mode="best">⚖️ Ровнее</button></div>` : ""}`;
   }
 
+  const fmtD = (d) => `<span class="${d > 0 ? "up" : d < 0 ? "down" : "muted"}">${d > 0 ? "+" : d < 0 ? "−" : "±"}${Math.abs(d).toFixed(2).replace(".", ",")}</span>`;
+  const resultMark = { W: "✅", D: "🤝", L: "❌" };
+
+  async function loadHistory() {
+    try { S.history = await api("GET", "/history"); } catch (e) { toast(e.message); S.history = { matches: [], stats: [] }; }
+    render();
+  }
+
+  function historyView() {
+    if (!S.history) { loadHistory(); return `<div class="empty">Загрузка…</div>`; }
+    const { matches, stats } = S.history;
+    const seg = `<div class="tabs" style="margin-top:12px">
+      <button data-a="hist" data-v="matches" class="${S.histView === "matches" ? "on" : ""}">Матчи</button>
+      <button data-a="hist" data-v="stats" class="${S.histView === "stats" ? "on" : ""}">Статистика</button></div>`;
+    if (S.histView === "matches") {
+      return seg + (matches.length ? matches.map((m) => `
+        <button class="card" data-a="match" data-id="${m.id}">
+          <span class="grow">${esc(m.title)}${m.status === "open" ? ' <span class="muted">· идёт</span>' : ""}</span>
+          <span class="sc"><span class="dotA"></span> ${m.score.A} : ${m.score.B} <span class="dotB"></span></span>
+        </button>`).join("") : `<div class="empty">Матчей пока не было</div>`);
+    }
+    if (!stats.length) return seg + `<div class="empty">Статистика появится после первого завершённого матча</div>`;
+    return seg + `<table class="st"><tr><th>#</th><th>Игрок</th><th>И</th><th>В-Н-П</th><th>⚽</th><th>🅰️</th>${S.data.me.isAdmin ? "<th>Рейт.</th>" : ""}</tr>
+      ${stats.map((p, i) => `<tr data-a="player" data-id="${p.id}"><td>${i + 1}</td><td>${esc(p.name)}</td><td>${p.games}</td>
+        <td>${p.wins}-${p.draws}-${p.losses}</td><td><b>${p.goals}</b></td><td>${p.assists}</td>${S.data.me.isAdmin ? `<td>${p.skill.toFixed(1)}</td>` : ""}</tr>`).join("")}
+      </table><p class="muted">И — игры, В-Н-П — победы, ничьи, поражения. Нажмите на игрока — его матчи.</p>`;
+  }
+
+  async function openMatch(id) {
+    S.sheet = { kind: "match", id, data: null }; render();
+    try { S.sheet.data = await api("GET", "/history/" + id); } catch (e) { toast(e.message); S.sheet = null; }
+    render();
+  }
+
+  async function openPlayer(id) {
+    S.sheet = { kind: "player", id, data: null }; render();
+    try { S.sheet.data = await api("GET", `/players/${id}/history`); } catch (e) { toast(e.message); S.sheet = null; }
+    render();
+  }
+
+  function sparkline(values) {
+    if (values.length < 2) return "";
+    const w = 300, h = 70, pad = 6, min = Math.min(...values), max = Math.max(...values), span = max - min || 1;
+    const pts = values.map((v, i) => `${(pad + (i * (w - 2 * pad)) / (values.length - 1)).toFixed(1)},${(h - pad - ((v - min) * (h - 2 * pad)) / span).toFixed(1)}`);
+    return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><polyline points="${pts.join(" ")}" fill="none" stroke="var(--btn)" stroke-width="2.5" stroke-linejoin="round"/></svg>`;
+  }
+
+  function matchSheet(d) {
+    const nm = (id) => { const p = d.players.find((x) => x.id === id); return p ? p.name : (d.names && d.names[id]) || "?"; };
+    const delta = new Map(d.ratings.map((r) => [r.playerId, r]));
+    const col = (t) => `<div class="col ${t}"><h3><span>${esc(S.data.teamNames[t])}</span></h3>
+      ${d.players.filter((p) => p.team === t).map((p) => { const r = delta.get(p.id);
+        return `<div class="chip">${esc(p.name)}${r ? `<small>${r.after != null ? r.after.toFixed(1) + " " : ""}${fmtD(r.delta)}</small>` : ""}</div>`; }).join("")}</div>`;
+    return `<h3>${esc(d.title)}</h3>
+      <div class="score"><div class="n">${d.score.A}</div><div class="sep">:</div><div class="n">${d.score.B}</div></div>
+      ${d.events.length ? `<ul class="feed">${d.events.map((e) => `<li><span class="time">${hhmm(e.createdAt)}</span><span class="dot${e.team}"></span>
+        <span class="what">${esc(nm(e.scorerId))}${e.type === "own_goal" ? ' <span class="sub">автогол</span>' : ""}${e.assistId ? `<div class="sub">пас: ${esc(nm(e.assistId))}</div>` : ""}</span></li>`).join("")}</ul>` : `<p class="muted center">Голов не было</p>`}
+      <h2>Составы${d.ratings.length ? " и рейтинг" : ""}</h2><div class="cols">${col("A")}${col("B")}</div>`;
+  }
+
+  function playerSheet(d) {
+    const n = d.matches.length;
+    const sum = (k) => d.matches.reduce((s, m) => s + m[k], 0);
+    const wins = d.matches.filter((m) => m.result === "W").length;
+    const curve = d.matches.slice().reverse().map((m) => m.after).filter((v) => v != null);
+    return `<h3>${esc(d.name)}</h3>
+      <p class="muted">${n} игр · ${wins} побед${n ? ` (${Math.round((100 * wins) / n)}%)` : ""} · ${sum("goals")} ⚽ · ${sum("assists")} 🅰️${d.skill != null ? ` · рейтинг ${d.skill.toFixed(2)}` : ""}</p>
+      ${curve.length >= 2 ? `<h2>Рейтинг</h2>${sparkline([curve[0] - d.matches[n - 1].delta, ...curve])}` : ""}
+      <h2>Матчи</h2>
+      ${n ? d.matches.map((m) => `<button class="card" data-a="match" data-id="${m.matchId}">
+        <span class="grow">${resultMark[m.result]} ${esc(m.title)}<div class="sub muted">${m.goals ? m.goals + " ⚽ " : ""}${m.assists ? m.assists + " 🅰️ " : ""}${m.ownGoals ? m.ownGoals + " автогол" : ""}</div></span>
+        <span class="sc"><span class="dot${m.team}"></span> ${m.score[m.team]} : ${m.score[m.team === "A" ? "B" : "A"]}</span>&nbsp;${fmtD(m.delta)}</button>`).join("") : `<p class="muted">Завершённых матчей пока нет</p>`}`;
+  }
+
+  const fmtSkill = (x) => String(Math.round(x * 100) / 100).replace(".", ",");
+
   function ratingsView() {
     if (!S.players) { loadPlayers(); return `<div class="empty">Загрузка…</div>`; }
     return `<p class="muted">Оценка 1–10 для деления на команды — видят только админы. Нажмите на имя, чтобы переименовать.</p>
       ${S.players.map((p) => `<div class="rate"><button class="name nm" data-a="rename" data-id="${p.id}">${esc(p.name)} ✎
           <div class="sub">${p.guest ? "гость" : esc([p.renamed ? p.tgName : "", p.username ? "@" + p.username : ""].filter(Boolean).join(" · "))}</div></button>
-        <button data-a="skill" data-id="${p.id}" data-d="-1">−</button><span class="val">${p.skill}</span><button data-a="skill" data-id="${p.id}" data-d="1">+</button></div>`).join("")}`;
+        <button data-a="skill" data-id="${p.id}" data-d="-1">−</button><span class="val">${fmtSkill(p.skill)}</span><button data-a="skill" data-id="${p.id}" data-d="1">+</button></div>`).join("")}`;
   }
 
   function sheetView() {
     const m = M(); if (!S.sheet) return "";
-    if (S.sheet.kind !== "rename" && !m) return "";
+    if (["assist", "own"].includes(S.sheet.kind) && !m) return "";
     if (S.sheet.kind === "assist") {
       const scorer = P(S.sheet.scorerId); if (!scorer) return "";
       const mates = m.players.filter((p) => p.team === scorer.team && p.id !== scorer.id);
@@ -347,6 +435,10 @@
         <div class="grid">${mates.map((p) => `<button class="pbtn ${scorer.team}" data-a="assist" data-id="${p.id}">${esc(p.name)}</button>`).join("")}</div>
         <button class="btn" data-a="assist" data-id="">Без паса</button>
         <button class="btn ghost" data-a="close">Отмена</button></div></div>`;
+    }
+    if (S.sheet.kind === "match" || S.sheet.kind === "player") {
+      const body = !S.sheet.data ? `<div class="empty">Загрузка…</div>` : S.sheet.kind === "match" ? matchSheet(S.sheet.data) : playerSheet(S.sheet.data);
+      return `<div class="sheet-bg" data-a="close"><div class="sheet" data-stop>${body}<button class="btn ghost" data-a="close">Закрыть</button></div></div>`;
     }
     if (S.sheet.kind === "rename") {
       const p = (S.players || []).find((x) => x.id === S.sheet.id); if (!p) return "";
@@ -376,14 +468,15 @@
     const d = S.data;
     if (!d.game) { app.innerHTML = `<div class="empty">Ближайшей игры нет.<br>Админ создаёт запись командой /game</div>`; return; }
     if (S.tab === "ratings" && !d.me.isAdmin) S.tab = "board";
-    const tabs = [["board", "Табло"], ["teams", "Составы"], ...(d.me.isAdmin ? [["ratings", "Игроки"]] : [])];
+    const tabs = [["board", "Табло"], ["teams", "Составы"], ["history", "История"], ...(d.me.isAdmin ? [["ratings", "Игроки"]] : [])];
     app.innerHTML = `${scoreView()}
       <div class="tabs">${tabs.map(([k, l]) => `<button data-a="tab" data-tab="${k}" class="${S.tab === k ? "on" : ""}">${l}</button>`).join("")}</div>
       ${S.queue.length ? `<div class="muted center">⏳ Не отправлено: ${S.queue.length} — отправлю, как появится связь</div>` : ""}
-      ${S.tab === "board" ? boardView() : S.tab === "teams" ? teamsView() : ratingsView()}`;
+      ${S.tab === "board" ? boardView() : S.tab === "teams" ? teamsView() : S.tab === "history" ? historyView() : ratingsView()}`;
     // шторку с полем ввода не перерисовываем при поллинге — иначе пропадёт набранный текст и клавиатура
     const key = S.sheet ? JSON.stringify(S.sheet) : "";
-    if (!(S.sheet && S.sheet.kind === "rename" && key === renderedSheet)) {
+    // то же для карточек истории — иначе сбрасывается прокрутка
+    if (!(S.sheet && ["rename", "match", "player"].includes(S.sheet.kind) && key === renderedSheet)) {
       document.getElementById("sheet").innerHTML = sheetView();
       renderedSheet = key;
     }
@@ -397,7 +490,13 @@
     if (el.classList.contains("sheet-bg") && ev.target.closest("[data-stop]")) return; // клик внутри шторки
     const a = el.dataset.a, id = el.dataset.id;
     switch (a) {
-      case "tab": S.tab = el.dataset.tab; tap(); render(); break;
+      case "tab":
+        S.tab = el.dataset.tab; tap();
+        if (S.tab === "history") S.history = null; // при каждом открытии — свежие данные
+        render(); break;
+      case "hist": S.histView = el.dataset.v; tap(); render(); break;
+      case "match": tap(); openMatch(Number(id)); break;
+      case "player": tap(); openPlayer(Number(id)); break;
       case "side": S.side = el.dataset.side; store.set("side", S.side); tap(); render(); break;
       case "scorer": S.sheet = { kind: "assist", scorerId: Number(id) }; tap(); render(); break;
       case "assist": addEvent({ type: "goal", scorerId: S.sheet.scorerId, assistId: id ? Number(id) : null }); break;

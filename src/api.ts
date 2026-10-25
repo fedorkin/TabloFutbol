@@ -13,6 +13,7 @@ import {
   type Week,
 } from "./db";
 import { refreshWeekMessage } from "./service";
+import { matchList, playerMatches, seasonStats } from "./stats";
 import { localToday, formatGameDate } from "./dates";
 import { validateInitData } from "./auth";
 import { TEAM_NAMES } from "./teams";
@@ -27,7 +28,9 @@ import {
   renderSummary,
   saveTeams,
   score,
-  setMatchStatus,
+  finishMatch,
+  eventNames,
+  reopenMatch,
   setSummaryMessage,
   type Match,
 } from "./match";
@@ -123,6 +126,7 @@ export function createApi(makeApi: (env: Env) => Api = (env) => new Api(env.BOT_
           cancelled: !!e.cancelled_at,
         })),
         score: score(events),
+        names: Object.fromEntries(await eventNames(db, events)),
       };
     }
     return c.json({
@@ -169,18 +173,83 @@ export function createApi(makeApi: (env: Env) => Api = (env) => new Api(env.BOT_
     requireAdmin(c);
     const week = await currentWeek(c);
     const match = await currentMatch(c);
-    const [lineup, events] = await Promise.all([getLineup(c.env.DB, match.id), getEvents(c.env.DB, match.id)]);
+    const ratings = await finishMatch(c.env.DB, match);
+    // после «открыть снова» → «завершить» старый итог заменяем новым
     if (match.summary_message_id) await c.var.api.deleteMessage(week.chat_id, match.summary_message_id).catch(() => {});
-    const msg = await c.var.api.sendMessage(week.chat_id, renderSummary(week, lineup, events), { parse_mode: "HTML" });
-    await setMatchStatus(c.env.DB, match.id, "finished");
+    const [lineup, events] = await Promise.all([getLineup(c.env.DB, match.id), getEvents(c.env.DB, match.id)]);
+    const names = await eventNames(c.env.DB, events);
+    const msg = await c.var.api.sendMessage(week.chat_id, renderSummary(week, lineup, events, ratings, names), {
+      parse_mode: "HTML",
+    });
     await setSummaryMessage(c.env.DB, match.id, msg.message_id);
     return c.json({ ok: true });
   });
 
   app.post("/reopen", async (c) => {
     requireAdmin(c);
-    await setMatchStatus(c.env.DB, (await currentMatch(c)).id, "open");
+    await reopenMatch(c.env.DB, await currentMatch(c));
     return c.json({ ok: true });
+  });
+
+  // ---------- история и статистика ----------
+
+  app.get("/history", async (c) => {
+    const [matches, stats] = await Promise.all([
+      matchList(c.env.DB, c.var.cfg.groupChatId),
+      seasonStats(c.env.DB, c.var.cfg.groupChatId),
+    ]);
+    const isAdmin = c.var.role === "admin";
+    return c.json({ matches, stats: stats.map(({ skill, ...s }) => (isAdmin ? { ...s, skill } : s)) });
+  });
+
+  app.get("/history/:id", async (c) => {
+    const db = c.env.DB;
+    const id = Number(c.req.param("id"));
+    const row = await db
+      .prepare(`SELECT m.*, w.game_date, w.chat_id FROM matches m JOIN weeks w ON w.id = m.week_id WHERE m.id = ?1`)
+      .bind(id)
+      .first<Match & { game_date: string; chat_id: number }>();
+    if (!row || row.chat_id !== c.var.cfg.groupChatId) throw new HttpError(404, "Матч не найден");
+    const isAdmin = c.var.role === "admin";
+    const [lineup, events, ratings] = await Promise.all([
+      getLineup(db, id),
+      getEvents(db, id),
+      db.prepare(`SELECT * FROM rating_changes WHERE match_id = ?1`).bind(id).all<{
+        player_id: number; delta: number; before: number; after: number;
+      }>(),
+    ]);
+    const names = await eventNames(db, events);
+    return c.json({
+      names: Object.fromEntries(names), // авторы голов, которых убрали из составов по ходу игры
+      id,
+      title: formatGameDate(row.game_date),
+      status: row.status,
+      score: score(events),
+      players: lineup.map((p) => ({ id: p.id, name: p.name, team: p.team })),
+      events: events
+        .filter((e) => !e.cancelled_at)
+        .map((e) => ({ id: e.id, type: e.type, team: e.team, scorerId: e.scorer_id, assistId: e.assist_id, createdAt: e.created_at })),
+      ratings: ratings.results.map((r) => ({
+        playerId: r.player_id,
+        delta: r.delta,
+        ...(isAdmin ? { before: r.before, after: r.after } : {}),
+      })),
+    });
+  });
+
+  app.get("/players/:id/history", async (c) => {
+    const db = c.env.DB;
+    const id = Number(c.req.param("id"));
+    const player = await db.prepare(`SELECT * FROM players WHERE id = ?1`).bind(id).first<Player & { skill: number }>();
+    if (!player) throw new HttpError(404, "Игрок не найден");
+    const isAdmin = c.var.role === "admin";
+    const rows = await playerMatches(db, c.var.cfg.groupChatId, id);
+    return c.json({
+      id,
+      name: playerName(player),
+      ...(isAdmin ? { skill: player.skill } : {}),
+      matches: rows.map(({ after, ...r }) => (isAdmin ? { ...r, after } : r)),
+    });
   });
 
   // ---------- рейтинги ----------

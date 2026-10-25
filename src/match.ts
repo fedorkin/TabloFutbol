@@ -2,6 +2,7 @@ import { getRoster, playerName, type Player, type Week } from "./db";
 import { balanceTeams, TEAM_NAMES, type Split, type Team } from "./teams";
 import { esc } from "./render";
 import { formatGameDate } from "./dates";
+import { computeRatingChanges, type RatingResult } from "./rating";
 
 export interface Match {
   id: number;
@@ -192,6 +193,109 @@ export async function setSummaryMessage(db: D1Database, matchId: number, message
   await db.prepare(`UPDATE matches SET summary_message_id = ?2 WHERE id = ?1`).bind(matchId, messageId).run();
 }
 
+// ---------- завершение и рейтинг ----------
+
+export interface PlayerMatchStats {
+  goals: number;
+  assists: number;
+  ownGoals: number;
+}
+
+export function playerStats(events: MatchEvent[]): Map<number, PlayerMatchStats> {
+  const stats = new Map<number, PlayerMatchStats>();
+  const st = (id: number) => stats.get(id) ?? (stats.set(id, { goals: 0, assists: 0, ownGoals: 0 }), stats.get(id)!);
+  for (const e of events) {
+    if (e.cancelled_at || e.scorer_id == null) continue;
+    if (e.type === "own_goal") st(e.scorer_id).ownGoals++;
+    else st(e.scorer_id).goals++;
+    if (e.assist_id != null) st(e.assist_id).assists++;
+  }
+  return stats;
+}
+
+/**
+ * Завершает матч и применяет изменения рейтинга. Повторный вызов (двойной тап) — 409.
+ */
+export async function finishMatch(db: D1Database, match: Match): Promise<RatingResult[]> {
+  const claim = await db
+    .prepare(`UPDATE matches SET status = 'finished', finished_at = datetime('now') WHERE id = ?1 AND status = 'open'`)
+    .bind(match.id)
+    .run();
+  if (!claim.meta.changes) throw new HttpError(409, "Матч уже завершён");
+
+  try {
+    const [lineup, events] = await Promise.all([getLineup(db, match.id), getEvents(db, match.id)]);
+    if (!lineup.some((p) => p.team === "A") || !lineup.some((p) => p.team === "B")) return [];
+
+    const { results: games } = await db
+      .prepare(`SELECT player_id, count(*) AS n FROM rating_changes GROUP BY player_id`)
+      .all<{ player_id: number; n: number }>();
+    const gamesBefore = new Map(games.map((g) => [g.player_id, g.n]));
+    const stats = playerStats(events);
+
+    const changes = computeRatingChanges(
+      lineup.map((p) => ({
+        playerId: p.id,
+        team: p.team,
+        skill: p.skill,
+        gamesBefore: gamesBefore.get(p.id) ?? 0,
+        goals: stats.get(p.id)?.goals ?? 0,
+        assists: stats.get(p.id)?.assists ?? 0,
+        ownGoals: stats.get(p.id)?.ownGoals ?? 0,
+      })),
+      score(events),
+    );
+
+    await db.batch(
+      changes.flatMap((r) => [
+        db
+          .prepare(
+            `INSERT INTO rating_changes
+               (match_id, player_id, team, result, goals, assists, own_goals, team_part, personal_part, delta, before, after)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
+          )
+          .bind(match.id, r.playerId, r.team, r.result, r.goals, r.assists, r.ownGoals, r.teamPart, r.personalPart, r.delta, r.before, r.after),
+        db.prepare(`UPDATE players SET skill = ?2 WHERE id = ?1`).bind(r.playerId, r.after),
+      ]),
+    );
+    return changes;
+  } catch (e) {
+    await setMatchStatus(db, match.id, "open");
+    throw e;
+  }
+}
+
+/** Открывает матч снова и откатывает изменения рейтинга (ручные правки после матча сохраняются). */
+export async function reopenMatch(db: D1Database, match: Match): Promise<void> {
+  if (match.status !== "finished") throw new HttpError(409, "Матч и так открыт");
+  const { results } = await db
+    .prepare(`SELECT player_id, delta FROM rating_changes WHERE match_id = ?1`)
+    .bind(match.id)
+    .all<{ player_id: number; delta: number }>();
+  await db.batch([
+    ...results.map((r) =>
+      db
+        .prepare(`UPDATE players SET skill = round(max(1, min(10, skill - ?2)), 2) WHERE id = ?1`)
+        .bind(r.player_id, r.delta),
+    ),
+    db.prepare(`DELETE FROM rating_changes WHERE match_id = ?1`).bind(match.id),
+    db.prepare(`UPDATE matches SET status = 'open', finished_at = NULL WHERE id = ?1`).bind(match.id),
+  ]);
+}
+
+/** Имена всех, кто упоминается в событиях (в т.ч. убранных из составов по ходу игры). */
+export async function eventNames(db: D1Database, events: MatchEvent[]): Promise<Map<number, string>> {
+  const ids = [...new Set(events.flatMap((e) => [e.scorer_id, e.assist_id]).filter((x): x is number => x != null))];
+  if (!ids.length) return new Map();
+  const { results } = await db
+    .prepare(`SELECT * FROM players WHERE id IN (${ids.map((_, i) => `?${i + 1}`).join(",")})`)
+    .bind(...ids)
+    .all<Player>();
+  return new Map(results.map((p) => [p.id, playerName(p)]));
+}
+
+export const fmtDelta = (d: number) => (d > 0 ? "+" : d < 0 ? "−" : "±") + Math.abs(d).toFixed(2).replace(".", ",");
+
 // ---------- итоги ----------
 
 export function score(events: MatchEvent[]): Record<Team, number> {
@@ -200,10 +304,16 @@ export function score(events: MatchEvent[]): Record<Team, number> {
   return s;
 }
 
-export function renderSummary(week: Week, lineup: LineupPlayer[], events: MatchEvent[]): string {
+export function renderSummary(
+  week: Week,
+  lineup: LineupPlayer[],
+  events: MatchEvent[],
+  ratings: RatingResult[] = [],
+  extraNames: Map<number, string> = new Map(),
+): string {
   const live = events.filter((e) => !e.cancelled_at);
   const s = score(live);
-  const name = new Map(lineup.map((p) => [p.id, p.name]));
+  const name = new Map([...extraNames, ...lineup.map((p) => [p.id, p.name] as const)]);
   const stats = new Map<number, { g: number; a: number; og: number }>();
   const st = (id: number) => stats.get(id) ?? (stats.set(id, { g: 0, a: 0, og: 0 }), stats.get(id)!);
   for (const e of live) {
@@ -234,6 +344,12 @@ export function renderSummary(week: Week, lineup: LineupPlayer[], events: MatchE
 
   for (const team of ["A", "B"] as const) {
     lines.push("", `${TEAM_NAMES[team]}: ${lineup.filter((p) => p.team === team).map((p) => esc(p.name)).join(", ")}`);
+  }
+  if (ratings.length) {
+    lines.push("", "<b>📈 Рейтинг</b>");
+    for (const r of [...ratings].sort((a, b) => b.delta - a.delta)) {
+      lines.push(`${esc(name.get(r.playerId) ?? "?")} ${fmtDelta(r.delta)}`);
+    }
   }
   return lines.join("\n");
 }
