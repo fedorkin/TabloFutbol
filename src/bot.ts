@@ -22,6 +22,7 @@ import { localToday, nextGameDate } from "./dates";
 import { esc, renderRosterText } from "./render";
 import { notifyPromoted, postWeek, refreshWeekMessage } from "./service";
 import { matchList, renderStats, seasonStats } from "./stats";
+import { absenceStreaks, activePauses, endPause, markJoined, markRemoved, SKIP_LIMIT, SKIP_WARN, startPause } from "./absence";
 import { autoTeams, getLineup, getMatchByWeek, HttpError, renderLineups } from "./match";
 import { InlineKeyboard } from "grammy";
 
@@ -30,6 +31,7 @@ const HELP = `<b>Команды</b>
 /chatid — id этого чата
 /name Имя — как вас показывать в списках
 /stats — голы, пасы и результаты за сезон
+/skips — кто сколько игр пропустил подряд (после 10 — удаление из группы)
 
 <b>Для админов группы</b>
 /game — опубликовать (или перепостить вниз) запись на ближайшую игру
@@ -38,6 +40,7 @@ const HELP = `<b>Команды</b>
 /add Имя — добавить игрока без Telegram (или ответом на сообщение игрока)
 /remove 7 — убрать игрока №7 из списка (или ответом на его сообщение)
 /name 7 Вася — переименовать игрока №7 (или ответом на его сообщение)
+/pause 7 до 15.11 — пауза (отпуск, травма): игры не считаются пропусками; /unpause 7 — снять
 /teams — поделить основу на две команды по рейтингу
 /tablo — кнопка открытия табло (счёт, составы, рейтинги)`;
 
@@ -266,6 +269,107 @@ export function createBot(env: Env, botInfo?: UserFromGetMe): Bot {
     });
   });
 
+  // ---------- пропуски и паузы ----------
+
+  // Кто вступил/вышел — чтобы правило пропусков знало, кто сейчас в группе.
+  bot.on("chat_member", async (ctx) => {
+    if (ctx.chat.id !== cfg.groupChatId) return;
+    const m = ctx.chatMember.new_chat_member;
+    if (m.user.is_bot) return;
+    const inChat =
+      m.status === "member" || m.status === "administrator" || m.status === "creator" || (m.status === "restricted" && m.is_member);
+    const player = await upsertTgPlayer(db, m.user);
+    if (inChat) await markJoined(db, player.id);
+    else await markRemoved(db, player.id);
+  });
+
+  /** Кого имеет в виду админ: ответ на сообщение, номер из списка записи или @username. */
+  async function resolveTarget(ctx: Context, arg: string): Promise<Player | null> {
+    const replyFrom = ctx.message?.reply_to_message?.from;
+    if (replyFrom && !replyFrom.is_bot) return upsertTgPlayer(db, replyFrom);
+    if (/^\d{1,3}$/.test(arg)) {
+      const week = await getCurrentWeek(db, cfg.groupChatId, today());
+      const roster = week ? await getRoster(db, week) : null;
+      const e = roster && [...roster.main, ...roster.waitlist].find((x) => x.pos === Number(arg));
+      return e ? db.prepare(`SELECT * FROM players WHERE id = ?1`).bind(e.playerId).first<Player>() : null;
+    }
+    if (arg.startsWith("@")) {
+      return db.prepare(`SELECT * FROM players WHERE lower(username) = lower(?1)`).bind(arg.slice(1)).first<Player>();
+    }
+    return null;
+  }
+
+  /** «15.11» → ближайшая такая дата не раньше сегодняшней. */
+  function parseUntil(s: string): string | null | undefined {
+    const m = /^(?:до\s+)?(\d{1,2})\.(\d{1,2})$/i.exec(s.trim());
+    if (!m) return s.trim() ? null : undefined;
+    const t = today();
+    let y = Number(t.slice(0, 4));
+    const mk = (yy: number) => `${yy}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+    if (mk(y) < t) y++;
+    return mk(y);
+  }
+
+  const PAUSE_HELP =
+    "Пауза (отпуск, травма) — игры не считаются пропусками.\n" +
+    "Ответом на сообщение игрока: /pause или /pause до 15.11\n" +
+    "По номеру из списка или @нику: /pause 7, /pause @nick до 15.11\n" +
+    "Снять: /unpause 7 (или ответом)";
+
+  bot.command(
+    "pause",
+    admin(async (ctx) => {
+      const parts = String(ctx.match ?? "").trim().split(/\s+/).filter(Boolean);
+      const hasReply = !!ctx.message?.reply_to_message?.from;
+      const who = hasReply ? "" : parts.shift() ?? "";
+      const player = await resolveTarget(ctx, who);
+      if (!player) return ctx.reply(PAUSE_HELP);
+      const until = parseUntil(parts.join(" "));
+      if (until === null) return ctx.reply("Не понял дату. Пример: /pause 7 до 15.11");
+      await startPause(db, player.id, today(), ctx.from!.id, until);
+      const week = await getCurrentWeek(db, cfg.groupChatId, today());
+      if (week) await refreshWeekMessage(ctx.api, db, week, cfg);
+      const [, mm, dd] = (until ?? "").split("-");
+      await ctx.reply(
+        `⏸ ${esc(playerName(player))} на паузе${until ? ` до ${dd}.${mm}` : " — до /unpause"}. Игры в это время не считаются пропусками.`,
+        { parse_mode: "HTML" },
+      );
+    }),
+  );
+
+  bot.command(
+    "unpause",
+    admin(async (ctx) => {
+      const player = await resolveTarget(ctx, String(ctx.match ?? "").trim());
+      if (!player) return ctx.reply(PAUSE_HELP);
+      const ok = await endPause(db, player.id, today());
+      const week = await getCurrentWeek(db, cfg.groupChatId, today());
+      if (ok && week) await refreshWeekMessage(ctx.api, db, week, cfg);
+      await ctx.reply(ok ? `▶️ ${esc(playerName(player))} снова в игре.` : `${esc(playerName(player))} не на паузе.`, {
+        parse_mode: "HTML",
+      });
+    }),
+  );
+
+  bot.command("skips", async (ctx) => {
+    if (!(await checkGroup(ctx))) return;
+    const all = (await absenceStreaks(db, cfg.groupChatId, today())).filter((e) => e.streak > 0);
+    const pauses = await activePauses(db, today());
+    const lines = [`📋 <b>Пропуски подряд</b> (удаление после ${SKIP_LIMIT}):`];
+    if (!all.length) lines.push("ни у кого нет 🎉");
+    for (const e of all.sort((a, b) => b.streak - a.streak).slice(0, 20)) {
+      lines.push(`${e.streak >= SKIP_WARN ? "⚠️ " : ""}${esc(e.name)} — ${e.streak}${e.paused ? " ⏸" : ""}`);
+    }
+    if (pauses.length) {
+      lines.push("", "⏸ <b>На паузе</b>");
+      for (const p of pauses) {
+        const [, mm, dd] = (p.to ?? "").split("-");
+        lines.push(`${esc(p.name)}${p.to ? ` — до ${dd}.${mm}` : ""}`);
+      }
+    }
+    await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
+  });
+
   const tabloKeyboard = (ctx: Context) =>
     new InlineKeyboard().url("📲 Открыть табло", `https://t.me/${ctx.me.username}?startapp=tablo`);
 
@@ -307,6 +411,9 @@ export const BOT_COMMANDS = [
   { command: "name", description: "Своё имя в списках, напр. /name Павел" },
   { command: "tablo", description: "Открыть табло" },
   { command: "stats", description: "Статистика: голы, пасы, победы" },
+  { command: "skips", description: "Пропуски подряд и паузы" },
+  { command: "pause", description: "Пауза игроку (админ)" },
+  { command: "unpause", description: "Снять паузу (админ)" },
   { command: "teams", description: "Поделить на команды (админ)" },
   { command: "help", description: "Справка" },
 ];

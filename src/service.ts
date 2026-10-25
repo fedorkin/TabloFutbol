@@ -2,16 +2,27 @@ import { Api, GrammyError } from "grammy";
 import type { Config } from "./env";
 import { getRoster, updateWeek, type Week } from "./db";
 import { renderRosterText, weekKeyboard, mention } from "./render";
-import { formatGameDate } from "./dates";
+import { formatGameDate, localToday } from "./dates";
+import { renderRisk, riskList } from "./absence";
 
 function isNotModified(e: unknown): boolean {
   return e instanceof GrammyError && e.description.includes("message is not modified");
 }
 
 /** Публикует новый пост с кнопками; старый пост (если был) удаляется. */
+/** Блок «давно не играли» под списком — пересчитывается при каждой перерисовке поста. */
+async function riskText(api: Api, db: D1Database, week: Week, cfg: Config): Promise<string> {
+  try {
+    return renderRisk(await riskList(api, db, week.chat_id, localToday(new Date(), cfg.timezone).date));
+  } catch (e) {
+    console.error("risk list", e);
+    return "";
+  }
+}
+
 export async function postWeek(api: Api, db: D1Database, week: Week, cfg: Config): Promise<Week> {
   const roster = await getRoster(db, week);
-  const msg = await api.sendMessage(week.chat_id, renderRosterText(week, roster, cfg), {
+  const msg = await api.sendMessage(week.chat_id, renderRosterText(week, roster, cfg, await riskText(api, db, week, cfg)), {
     parse_mode: "HTML",
     reply_markup: weekKeyboard(week),
     link_preview_options: { is_disabled: true },
@@ -28,7 +39,7 @@ export async function refreshWeekMessage(api: Api, db: D1Database, week: Week, c
   if (!week.message_id) return;
   const roster = await getRoster(db, week);
   try {
-    await api.editMessageText(week.chat_id, week.message_id, renderRosterText(week, roster, cfg), {
+    await api.editMessageText(week.chat_id, week.message_id, renderRosterText(week, roster, cfg, await riskText(api, db, week, cfg)), {
       parse_mode: "HTML",
       reply_markup: weekKeyboard(week),
       link_preview_options: { is_disabled: true },

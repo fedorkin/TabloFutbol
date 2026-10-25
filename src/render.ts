@@ -16,7 +16,7 @@ function title(week: Week, cfg: Config): string {
   return `⚽ <b>Футбол — ${esc(when)}</b>` + (cfg.gamePlace ? `\n📍 ${esc(cfg.gamePlace)}` : "");
 }
 
-export function renderRosterText(week: Week, roster: Roster, cfg: Config): string {
+export function renderRosterText(week: Week, roster: Roster, cfg: Config, extra = ""): string {
   const lines = [title(week, cfg), ""];
 
   lines.push(`✅ <b>Играют (${roster.main.length}/${week.player_limit})</b>`);
@@ -38,6 +38,7 @@ export function renderRosterText(week: Week, roster: Roster, cfg: Config): strin
     const free = week.player_limit - roster.main.length;
     lines.push(free > 0 ? `Свободно мест: ${free}` : "Состав собран 🎉 Дальше — в лист ожидания");
   }
+  if (extra) lines.push(extra);
   return lines.join("\n");
 }
 

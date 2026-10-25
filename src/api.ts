@@ -13,6 +13,7 @@ import {
   type Week,
 } from "./db";
 import { refreshWeekMessage } from "./service";
+import { enforceAbsence } from "./absence";
 import { editSkill, matchList, playerMatches, seasonStats, skillEdits } from "./stats";
 import { localToday, formatGameDate } from "./dates";
 import { validateInitData } from "./auth";
@@ -182,6 +183,9 @@ export function createApi(makeApi: (env: Env) => Api = (env) => new Api(env.BOT_
       parse_mode: "HTML",
     });
     await setSummaryMessage(c.env.DB, match.id, msg.message_id);
+    // правило 10 пропусков подряд — после каждой завершённой игры
+    const today = localToday(new Date(), c.var.cfg.timezone).date;
+    await enforceAbsence(c.var.api, c.env.DB, week.chat_id, today).catch((e) => console.error("absence", e));
     return c.json({ ok: true });
   });
 

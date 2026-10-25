@@ -26,7 +26,7 @@ app.get("/setup", async (c) => {
   const url = new URL("/webhook", c.req.url).toString();
   await api.setWebhook(url, {
     secret_token: c.env.WEBHOOK_SECRET,
-    allowed_updates: ["message", "callback_query"],
+    allowed_updates: ["message", "callback_query", "chat_member"],
     drop_pending_updates: true,
   });
   await api.setMyCommands(BOT_COMMANDS, { scope: { type: "all_group_chats" } });
