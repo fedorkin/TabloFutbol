@@ -1,0 +1,29 @@
+name = "soccer-bot"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Секреты (задаются через `npx wrangler secret put ...`, не храним в репозитории):
+#   BOT_TOKEN       — токен от @BotFather
+#   WEBHOOK_SECRET  — любая длинная случайная строка
+
+[vars]
+GROUP_CHAT_ID = "0"          # id группы, узнать командой /chatid в группе
+TIMEZONE = "Asia/Nicosia"
+PLAYER_LIMIT = "10"
+GAME_WEEKDAY = "4"           # 1 = пн … 7 = вс; 4 = четверг
+GAME_TIME = "20:00"
+GAME_PLACE = ""              # необязательно, например "Стадион X"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "soccer"
+database_id = "REPLACE_WITH_ID_FROM_wrangler_d1_create"
+migrations_dir = "migrations"
+
+[triggers]
+# Время в UTC. Кипр: UTC+2 зимой, UTC+3 летом.
+crons = [
+  "0 7 * * 1",   # понедельник ~09:00–10:00 — пост «кто играет в четверг»
+  "0 15 * * 3",  # среда ~17:00–18:00 — напоминание, если состав не собран
+]
