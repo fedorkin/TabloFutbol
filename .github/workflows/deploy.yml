@@ -16,7 +16,7 @@ jobs:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-      GROUP_CHAT_ID: ${{ vars.GROUP_CHAT_ID || '0' }}
+      GROUP_CHAT_ID: ${{ vars.GROUP_CHAT_ID }}  # необязательно: иначе берётся из wrangler.toml
     steps:
       - uses: actions/checkout@v5
 
@@ -55,7 +55,8 @@ jobs:
 
       - name: Deploy worker
         run: |
-          scripts/ci-run.sh npx wrangler deploy --var "GROUP_CHAT_ID:$GROUP_CHAT_ID" > deploy.log || { cat deploy.log; exit 1; }
+          args=(); [ -n "$GROUP_CHAT_ID" ] && args=(--var "GROUP_CHAT_ID:$GROUP_CHAT_ID")
+          scripts/ci-run.sh npx wrangler deploy "${args[@]}" > deploy.log || { cat deploy.log; exit 1; }
           cat deploy.log
           url=$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -1)
           if [ -z "$url" ]; then echo "::error::Не нашёл адрес workers.dev в выводе deploy"; exit 1; fi
@@ -73,7 +74,7 @@ jobs:
             if curl -fsS "$WORKER_URL/setup?secret=$WEBHOOK_SECRET" -o setup.json; then
               jq '{ok, webhook, pending: .info.pending_update_count, last_error: .info.last_error_message}' setup.json
               echo "::notice title=Telegram webhook::$(jq -r '"ok=\(.ok) pending=\(.info.pending_update_count) last_error=\(.info.last_error_message // "нет")"' setup.json)"
-              echo "::notice title=GROUP_CHAT_ID::$GROUP_CHAT_ID"
+              echo "::notice title=GROUP_CHAT_ID::${GROUP_CHAT_ID:-из wrangler.toml: $(grep -oP '^GROUP_CHAT_ID = "\K[^"]+' wrangler.toml)}"
               exit 0
             fi
             sleep 5
@@ -85,7 +86,7 @@ jobs:
           {
             echo "### ✅ Бот задеплоен"
             echo "- Worker: $WORKER_URL"
-            if [ "$GROUP_CHAT_ID" = "0" ]; then
+            if [ -z "$GROUP_CHAT_ID" ] && grep -q '^GROUP_CHAT_ID = "0"' wrangler.toml; then
               echo "- ⚠️ GROUP_CHAT_ID не задан: напишите в группе /chatid, добавьте id в Settings → Variables → GROUP_CHAT_ID и перезапустите workflow"
             else
               echo "- Группа: $GROUP_CHAT_ID"
