@@ -148,14 +148,20 @@ describe("Mini App", () => {
     await ui.until(() => ui.$('[data-tab="ratings"]'), "вкладка рейтингов");
     ui.click(ui.$('[data-tab="ratings"]'));
     await ui.until(() => ui.$$(".rate").length === 10, "список рейтингов");
-    const start = Number(ui.$$(".rate .val")[0].textContent!.replace(",", "."));
-    const target = Math.min(10, Math.round((start + 2) * 100) / 100);
-    ui.click(ui.$$('.rate [data-d="1"]')[0]);
-    ui.click(ui.$$('.rate [data-d="1"]')[0]);
-    expect(ui.$$(".rate .val")[0].textContent).toBe(String(target).replace(".", ","));
-    await new Promise((r) => setTimeout(r, 700)); // дебаунс сохранения
-    const { results } = await env.DB.prepare(`SELECT skill FROM players WHERE skill = ?1`).bind(target).all();
-    expect(results.length).toBeGreaterThanOrEqual(1);
+    // берём конкретного игрока, а не «первую строку»: порядок и чужие значения не влияют
+    const row = () => ui.$$(".rate").find((r) => r.textContent!.includes("Игрок3"))!;
+    const start = Number(row().querySelector(".val")!.textContent!.replace(",", "."));
+    const target = Math.round(Math.min(10, start + 2) * 100) / 100;
+    ui.click(row().querySelector('[data-d="1"]') as HTMLElement);
+    ui.click(row().querySelector('[data-d="1"]') as HTMLElement);
+    expect(row().querySelector(".val")!.textContent).toBe(String(target).replace(".", ","));
+    // ждём сохранения (дебаунс 500 мс + запрос), а не фиксированное время — CI бывает медленным
+    let saved: number | undefined;
+    for (let i = 0; i < 100 && saved !== target; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      saved = (await env.DB.prepare(`SELECT skill FROM players WHERE first_name = 'Игрок3'`).first<{ skill: number }>())?.skill;
+    }
+    expect(saved).toBe(target);
     ui.dom.window.close();
   });
 
