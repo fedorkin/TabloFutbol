@@ -92,7 +92,7 @@ describe("Mini App", () => {
     await ui.until(() => ui.$$(".col.A .chip").length === 5 && ui.$$(".col.B .chip").length === 5, "составы 5×5");
     expect(ui.$(".tabs .on")!.textContent).toBe("Составы");
 
-    // вкладка «Табло», телефон у ворот синих → кнопки игроков оранжевых
+    // вкладка «Табло», телефон у ворот зелёных → кнопки игроков оранжевых
     ui.click(ui.$('[data-tab="board"]'));
     ui.click(ui.$('[data-side="A"]'));
     await ui.until(() => ui.$$('.pbtn.B[data-a="scorer"]').length === 5, "кнопки авторов гола");
@@ -105,7 +105,7 @@ describe("Mini App", () => {
     await ui.until(() => !ui.text().includes("Не отправлено"), "очередь отправлена");
     expect(ui.$(".feed li .sub")!.textContent).toContain("пас:");
 
-    // автогол защитника синих → гол оранжевым
+    // автогол защитника зелёных → гол оранжевым
     ui.click(ui.$('[data-a="own"]'));
     await ui.until(() => ui.$$('.sheet [data-a="ownby"]').length === 5, "шторка автогола");
     ui.click(ui.$$('.sheet [data-a="ownby"]')[0]);

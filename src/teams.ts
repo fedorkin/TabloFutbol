@@ -1,6 +1,6 @@
 export type Team = "A" | "B";
 
-export const TEAM_NAMES: Record<Team, string> = { A: "🔵 Синие", B: "🟠 Оранжевые" };
+export const TEAM_NAMES: Record<Team, string> = { A: "🟢 Зелёные", B: "🟠 Оранжевые" };
 
 export interface SkilledPlayer {
   id: number;
@@ -72,6 +72,6 @@ export function balanceTeams(
   const limit = splits[0].diff + (mode === "shuffle" ? 1 : 0);
   const pool = splits.filter((s) => s.diff <= limit + 1e-9).slice(0, mode === "shuffle" ? 40 : 1000);
   const pick = pool[Math.floor(rnd() * pool.length)];
-  // случайно меняем цвета, чтобы «Синие» не были всегда с одним и тем же игроком
+  // случайно меняем цвета, чтобы «Зелёные» не были всегда с одним и тем же игроком
   return rnd() < 0.5 ? pick : { A: pick.B, B: pick.A, diff: pick.diff };
 }

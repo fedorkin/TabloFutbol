@@ -186,7 +186,7 @@ describe("матч через API", () => {
     const msg = calls.find((c) => c.method === "sendMessage")!.payload;
     expect(msg.chat_id).toBe(GROUP);
     expect(msg.text).toContain("Итог — четверг, 29 октября");
-    expect(msg.text).toContain("🔵 Синие 2 : 0 Оранжевые 🟠");
+    expect(msg.text).toContain("🟢 Зелёные 2 : 0 Оранжевые 🟠");
     expect(msg.text).toContain(`Игрок${A[0]} — 1 ⚽`);
     expect(msg.text).toContain("Автоголы:");
     expect(msg.text).toContain("📈 Рейтинг");
@@ -195,7 +195,7 @@ describe("матч через API", () => {
     expect((await req(ADMIN, "POST", "/finish")).status).toBe(409); // двойной тап не пересчитывает рейтинг
 
     const skillsAfter = Object.fromEntries((await req(ADMIN, "GET", "/players")).json.players.map((p: any) => [p.id, p.skill]));
-    const winners = A.slice(1); // синие после ручной правки составов
+    const winners = A.slice(1); // зелёные после ручной правки составов
     for (const id of winners) {
       if (skillsBefore[id] < 10) expect(skillsAfter[id]).toBeGreaterThan(skillsBefore[id]);
       else expect(skillsAfter[id]).toBe(10); // потолок шкалы
