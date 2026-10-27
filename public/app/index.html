@@ -378,7 +378,7 @@
     if (S.histView === "matches") {
       return seg + (matches.length ? matches.map((m) => `
         <button class="card" data-a="match" data-id="${m.id}">
-          <span class="grow">${esc(m.title)}${m.status === "open" ? ' <span class="muted">· идёт</span>' : ""}</span>
+          <span class="grow">${esc(m.title)}${m.status === "open" ? ` <span class="muted">· ${m.score.A + m.score.B ? "идёт" : "составы собраны"}</span>` : ""}</span>
           <span class="sc"><span class="dotA"></span> ${m.score.A} : ${m.score.B} <span class="dotB"></span></span>
         </button>`).join("") : `<div class="empty">Матчей пока не было</div>`);
     }
