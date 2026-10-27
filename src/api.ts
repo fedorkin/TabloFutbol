@@ -12,7 +12,7 @@ import {
   type TgUser,
   type Week,
 } from "./db";
-import { refreshWeekMessage } from "./service";
+import { announceKickoff, botUsername, refreshWeekMessage } from "./service";
 import { enforceAbsence } from "./absence";
 import { editSkill, matchList, playerMatches, seasonStats, skillEdits } from "./stats";
 import { localToday, formatGameDate } from "./dates";
@@ -30,6 +30,9 @@ import {
   saveTeams,
   score,
   finishMatch,
+  matchPhase,
+  startMatch,
+  unstartMatch,
   eventNames,
   reopenMatch,
   setSummaryMessage,
@@ -116,6 +119,7 @@ export function createApi(makeApi: (env: Env) => Api = (env) => new Api(env.BOT_
       matchDto = {
         id: match.id,
         status: match.status,
+        phase: matchPhase(match),
         players: lineup.map((p) => ({ id: p.id, name: p.name, team: p.team, ...(isAdmin ? { skill: p.skill } : {}) })),
         events: events.map((e) => ({
           id: e.id,
@@ -165,6 +169,25 @@ export function createApi(makeApi: (env: Env) => Api = (env) => new Api(env.BOT_
 
   app.post("/events/:id/cancel", async (c) => {
     await cancelEvent(c.env.DB, await currentMatch(c), c.req.param("id"));
+    return c.json({ ok: true });
+  });
+
+  // ---------- старт ----------
+
+  app.post("/start", async (c) => {
+    requireAdmin(c);
+    const week = await currentWeek(c);
+    const match = await currentMatch(c);
+    await startMatch(c.env.DB, match);
+    await announceKickoff(c.var.api, c.env.DB, week, match.id, c.var.cfg, await botUsername(c.var.api)).catch((e) =>
+      console.error("kickoff", e),
+    );
+    return c.json({ ok: true });
+  });
+
+  app.post("/unstart", async (c) => {
+    requireAdmin(c);
+    await unstartMatch(c.env.DB, await currentMatch(c));
     return c.json({ ok: true });
   });
 

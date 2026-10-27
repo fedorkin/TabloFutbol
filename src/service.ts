@@ -1,4 +1,5 @@
-import { Api, GrammyError } from "grammy";
+import { Api, GrammyError, InlineKeyboard } from "grammy";
+import { getLineup, renderKickoff } from "./match";
 import type { Config } from "./env";
 import { getRoster, updateWeek, type Week } from "./db";
 import { renderRosterText, weekKeyboard, mention } from "./render";
@@ -81,4 +82,32 @@ export async function notifyPromoted(
       { parse_mode: "HTML", reply_parameters: week.message_id ? { message_id: week.message_id, allow_sending_without_reply: true } : undefined },
     );
   }
+}
+
+/**
+ * После старта игры: запись закрывается (дальнейшие отказы/подъёмы уже не нужны),
+ * в группу уходит сообщение с составами и кнопкой табло.
+ */
+export async function announceKickoff(
+  api: Api,
+  db: D1Database,
+  week: Week,
+  matchId: number,
+  cfg: Config,
+  botUsername: string,
+): Promise<void> {
+  if (week.status === "open") {
+    await updateWeek(db, week.id, { status: "closed" });
+    await refreshWeekMessage(api, db, { ...week, status: "closed" }, cfg).catch(() => {});
+  }
+  const lineup = await getLineup(db, matchId);
+  await api.sendMessage(week.chat_id, renderKickoff(week, lineup), {
+    parse_mode: "HTML",
+    reply_markup: new InlineKeyboard().url("📲 Открыть табло", `https://t.me/${botUsername}?startapp=tablo`),
+  });
+}
+
+let botUsernameCache: string | undefined;
+export async function botUsername(api: Api): Promise<string> {
+  return (botUsernameCache ??= (await api.getMe()).username);
 }

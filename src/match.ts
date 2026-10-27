@@ -9,7 +9,13 @@ export interface Match {
   week_id: number;
   status: "open" | "finished";
   summary_message_id: number | null;
+  started_at: string | null;
 }
+
+/** draft — собираем составы; live — игра идёт; finished — завершён. */
+export type MatchPhase = "draft" | "live" | "finished";
+export const matchPhase = (m: Pick<Match, "status" | "started_at">): MatchPhase =>
+  m.status === "finished" ? "finished" : m.started_at ? "live" : "draft";
 
 export interface MatchEvent {
   id: string;
@@ -95,8 +101,8 @@ export async function saveTeams(db: D1Database, week: Week, split: Pick<Split, "
 /** Делит основной состав недели по рейтингу и сохраняет. Нельзя, если уже забиты голы. */
 export async function autoTeams(db: D1Database, week: Week, mode: "best" | "shuffle" = "best"): Promise<Split> {
   const existing = await getMatchByWeek(db, week.id);
-  if (existing && (await hasGoals(db, existing.id))) {
-    throw new HttpError(409, "Уже есть голы — составы можно менять только вручную");
+  if (existing && (existing.started_at || existing.status === "finished" || (await hasGoals(db, existing.id)))) {
+    throw new HttpError(409, "Игра уже началась — составы можно менять только вручную");
   }
   const roster = await getRoster(db, week);
   if (roster.main.length < 2) throw new HttpError(400, "В основе меньше двух игроков");
@@ -114,6 +120,16 @@ export function renderLineups(week: Week, lineup: LineupPlayer[]): string {
     lines.push("", `<b>${TEAM_NAMES[team]}</b> (${ps.length})`, ...ps.map((p) => esc(p.name)));
   }
   lines.push("", "Поправить составы и вести счёт — в табло 👇");
+  return lines.join("\n");
+}
+
+export function renderKickoff(week: Week, lineup: LineupPlayer[]): string {
+  const lines = [`⚽ <b>Игра началась!</b> ${esc(formatGameDate(week.game_date))}`];
+  for (const team of ["A", "B"] as const) {
+    const ps = lineup.filter((p) => p.team === team);
+    lines.push("", `<b>${TEAM_NAMES[team]}</b> (${ps.length})`, ps.map((p) => esc(p.name)).join(", "));
+  }
+  lines.push("", "Голы отмечаем в табло — телефон у каждых ворот 👇");
   return lines.join("\n");
 }
 
@@ -137,6 +153,7 @@ export interface NewEvent {
 /** Проверяет событие по составам и сохраняет. Повтор того же id ничего не делает. */
 export async function addEvent(db: D1Database, match: Match, e: NewEvent, createdBy: number): Promise<void> {
   if (match.status !== "open") throw new HttpError(409, "Матч завершён");
+  if (!match.started_at) throw new HttpError(409, "Игра ещё не началась — админ нажимает «Начать игру»");
   if (!/^[\w-]{8,64}$/.test(e.id)) throw new HttpError(400, "Некорректный id события");
 
   const lineup = await getLineup(db, match.id);
@@ -216,7 +233,32 @@ export function playerStats(events: MatchEvent[]): Map<number, PlayerMatchStats>
 /**
  * Завершает матч и применяет изменения рейтинга. Повторный вызов (двойной тап) — 409.
  */
+/** Старт игры. Повторный старт — 409 (двойной тап, два админа). */
+export async function startMatch(db: D1Database, match: Match): Promise<void> {
+  if (match.status !== "open") throw new HttpError(409, "Матч уже завершён");
+  const lineup = await getLineup(db, match.id);
+  if (!lineup.some((p) => p.team === "A") || !lineup.some((p) => p.team === "B")) {
+    throw new HttpError(400, "Сначала соберите обе команды");
+  }
+  const r = await db
+    .prepare(
+      `UPDATE matches SET started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = ?1 AND status = 'open' AND started_at IS NULL`,
+    )
+    .bind(match.id)
+    .run();
+  if (!r.meta.changes) throw new HttpError(409, "Игра уже идёт");
+}
+
+/** Отменить старт (нажали случайно) — только пока не было голов. */
+export async function unstartMatch(db: D1Database, match: Match): Promise<void> {
+  if (match.status !== "open" || !match.started_at) throw new HttpError(409, "Игра не идёт");
+  if (await hasGoals(db, match.id)) throw new HttpError(409, "Уже есть голы — сначала отмените их");
+  await db.prepare(`UPDATE matches SET started_at = NULL WHERE id = ?1`).bind(match.id).run();
+}
+
 export async function finishMatch(db: D1Database, match: Match): Promise<RatingResult[]> {
+  if (match.status === "open" && !match.started_at) throw new HttpError(409, "Игра ещё не началась");
   const claim = await db
     .prepare(`UPDATE matches SET status = 'finished', finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?1 AND status = 'open'`)
     .bind(match.id)

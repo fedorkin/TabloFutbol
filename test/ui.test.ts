@@ -95,7 +95,19 @@ describe("Mini App", () => {
     // вкладка «Табло», телефон у ворот зелёных → кнопки игроков оранжевых
     ui.click(ui.$('[data-tab="board"]'));
     ui.click(ui.$('[data-side="A"]'));
+    await ui.until(() => ui.text().includes("Игра ещё не началась"), "до старта");
+    expect(ui.$('[data-a="scorer"]')).toBeNull(); // голы до старта не отметить
+    expect(ui.$(".score")).toBeNull();
+
+    // второй телефон (не админ) видит ожидание, кнопки «Начать» у него нет
+    const early = await openApp(6);
+    await early.until(() => early.text().includes("Админ начнёт игру"), "ожидание у игрока");
+    expect(early.$('[data-a="kickoff"]')).toBeNull();
+    early.dom.window.close();
+
+    ui.click(ui.$('[data-a="kickoff"]'));
     await ui.until(() => ui.$$('.pbtn.B[data-a="scorer"]').length === 5, "кнопки авторов гола");
+    expect(ui.$$(".score .n").map((n) => n.textContent).join(":")).toBe("0:0");
 
     ui.click(ui.$$('[data-a="scorer"]')[0]);
     await ui.until(() => ui.$(".sheet"), "шторка выбора паса");

@@ -150,6 +150,36 @@ describe("матч через API", () => {
     expect([A.length, B.length]).toEqual([5, 5]);
   });
 
+  it("старт игры: до него голы не принимаются, пересобирать можно; после — табло, запись закрыта", async () => {
+    const early = { id: "early-001", type: "goal", scorerId: A[0] };
+    expect((await req(2, "POST", "/events", early)).status).toBe(409);
+    expect((await state()).match.phase).toBe("draft");
+    expect((await req(ADMIN, "POST", "/finish")).status).toBe(409); // нельзя завершить неначатую
+    expect((await req(ADMIN, "POST", "/teams/auto", { mode: "best" })).status).toBe(200); // до старта — сколько угодно
+    const m = (await state()).match;
+    A = m.players.filter((p: any) => p.team === "A").map((p: any) => p.id);
+    B = m.players.filter((p: any) => p.team === "B").map((p: any) => p.id);
+
+    expect((await req(2, "POST", "/start")).status).toBe(403);
+    calls = [];
+    expect((await req(ADMIN, "POST", "/start")).status).toBe(200);
+    expect((await req(ADMIN, "POST", "/start")).status).toBe(409); // второй админ / двойной тап
+    const kickoff = calls.find((c) => c.method === "sendMessage")!.payload;
+    expect(kickoff.chat_id).toBe(GROUP);
+    expect(kickoff.text).toContain("Игра началась!");
+    expect(kickoff.text).toContain("🟢 Зелёные");
+    expect(kickoff.reply_markup.inline_keyboard[0][0].url).toContain("startapp=tablo");
+    const week = await env.DB.prepare(`SELECT status FROM weeks WHERE chat_id = ?1`).bind(GROUP).first<{ status: string }>();
+    expect(week!.status).toBe("closed");
+    expect((await state()).match.phase).toBe("live");
+    expect((await req(ADMIN, "POST", "/teams/auto", { mode: "best" })).status).toBe(409); // после старта — только вручную
+
+    // случайный старт можно отменить, пока не было голов
+    expect((await req(ADMIN, "POST", "/unstart")).status).toBe(200);
+    expect((await state()).match.phase).toBe("draft");
+    expect((await req(ADMIN, "POST", "/start")).status).toBe(200);
+  });
+
   it("голы, пас, идемпотентность, автогол, отмена", async () => {
     const goal = { id: "goal-0001", type: "goal", scorerId: A[0], assistId: A[1] };
     expect((await req(2, "POST", "/events", goal)).status).toBe(200);
@@ -167,6 +197,7 @@ describe("матч через API", () => {
     const s = await state();
     expect(s.match.score).toEqual({ A: 2, B: 0 });
     expect(s.match.events.find((e: any) => e.id === "goal-0003").cancelled).toBe(true);
+    expect((await req(ADMIN, "POST", "/unstart")).status).toBe(409); // голы есть — старт не отменить
   });
 
   it("после голов автодележка запрещена, ручная правка — можно", async () => {

@@ -20,10 +20,10 @@ import {
 } from "./db";
 import { localToday, nextGameDate } from "./dates";
 import { esc, renderRosterText } from "./render";
-import { notifyPromoted, postWeek, refreshWeekMessage } from "./service";
+import { announceKickoff, notifyPromoted, postWeek, refreshWeekMessage } from "./service";
 import { matchList, renderStats, seasonStats } from "./stats";
 import { absenceStreaks, activePauses, endPause, markJoined, markRemoved, SKIP_LIMIT, SKIP_WARN, startPause } from "./absence";
-import { autoTeams, getLineup, getMatchByWeek, HttpError, renderLineups } from "./match";
+import { startMatch, autoTeams, getLineup, getMatchByWeek, HttpError, renderLineups } from "./match";
 import { InlineKeyboard } from "grammy";
 
 const HELP = `<b>Команды</b>
@@ -41,7 +41,8 @@ const HELP = `<b>Команды</b>
 /remove 7 — убрать игрока №7 из списка (или ответом на его сообщение)
 /name 7 Вася — переименовать игрока №7 (или ответом на его сообщение)
 /pause 7 до 15.11 — пауза (отпуск, травма): игры не считаются пропусками; /unpause 7 — снять
-/teams — поделить основу на две команды по рейтингу
+/teams — поделить основу на две команды по рейтингу (до старта — сколько угодно раз)
+/kickoff — начать игру: включается табло, запись закрывается
 /tablo — кнопка открытия табло (счёт, составы, рейтинги)`;
 
 // Telegram шлёт сообщения анонимных админов от имени этого бота.
@@ -370,6 +371,22 @@ export function createBot(env: Env, botInfo?: UserFromGetMe): Bot {
     await ctx.reply(lines.join("\n"), { parse_mode: "HTML" });
   });
 
+  bot.command(
+    "kickoff",
+    admin(async (ctx, week) => {
+      if (!week) return noGame(ctx);
+      const match = await getMatchByWeek(db, week.id);
+      if (!match) return ctx.reply("Сначала соберите команды: /teams");
+      try {
+        await startMatch(db, match);
+      } catch (e) {
+        if (e instanceof HttpError) return ctx.reply(e.message);
+        throw e;
+      }
+      await announceKickoff(ctx.api, db, week, match.id, cfg, ctx.me.username);
+    }),
+  );
+
   const tabloKeyboard = (ctx: Context) =>
     new InlineKeyboard().url("📲 Открыть табло", `https://t.me/${ctx.me.username}?startapp=tablo`);
 
@@ -415,6 +432,7 @@ export const BOT_COMMANDS = [
   { command: "pause", description: "Пауза игроку (админ)" },
   { command: "unpause", description: "Снять паузу (админ)" },
   { command: "teams", description: "Поделить на команды (админ)" },
+  { command: "kickoff", description: "Начать игру (админ)" },
   { command: "help", description: "Справка" },
 ];
 

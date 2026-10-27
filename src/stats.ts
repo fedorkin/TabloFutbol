@@ -53,13 +53,14 @@ export interface MatchListItem {
   date: string;
   title: string;
   status: "open" | "finished";
+  started: boolean;
   score: Record<Team, number>;
 }
 
 export async function matchList(db: D1Database, chatId: number): Promise<MatchListItem[]> {
   const { results } = await db
     .prepare(
-      `SELECT m.id, m.status, w.game_date,
+      `SELECT m.id, m.status, m.started_at, w.game_date,
               (SELECT count(*) FROM match_events e WHERE e.match_id = m.id AND e.cancelled_at IS NULL AND e.team = 'A') AS a,
               (SELECT count(*) FROM match_events e WHERE e.match_id = m.id AND e.cancelled_at IS NULL AND e.team = 'B') AS b
        FROM matches m JOIN weeks w ON w.id = m.week_id
@@ -68,12 +69,13 @@ export async function matchList(db: D1Database, chatId: number): Promise<MatchLi
        LIMIT 200`,
     )
     .bind(chatId)
-    .all<{ id: number; status: "open" | "finished"; game_date: string; a: number; b: number }>();
+    .all<{ id: number; status: "open" | "finished"; started_at: string | null; game_date: string; a: number; b: number }>();
   return results.map((r) => ({
     id: r.id,
     date: r.game_date,
     title: formatGameDate(r.game_date),
     status: r.status,
+    started: !!r.started_at,
     score: { A: r.a, B: r.b },
   }));
 }

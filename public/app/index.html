@@ -284,7 +284,7 @@
     const tn = d.teamNames;
     return `
       <div class="game">${esc(d.game.title)}${d.game.time ? ", " + esc(d.game.time) : ""}</div>
-      ${M() ? `<div class="score">
+      ${M() && M().phase !== "draft" ? `<div class="score">
         <div class="t A">${esc(tn.A)}</div><div class="n">${s.A}</div><div class="sep">:</div><div class="n">${s.B}</div><div class="t">${esc(tn.B)}</div>
       </div>` : ""}`;
   }
@@ -311,6 +311,21 @@
     }
 
     const tn = d.teamNames;
+    if (m.phase === "draft") {
+      const a = m.players.filter((p) => p.team === "A").length, b = m.players.filter((p) => p.team === "B").length;
+      return `<div class="banner center">⏳ Игра ещё не началась<br><span class="muted">Составы ${a} × ${b} — до старта их можно пересобирать на вкладке «Составы»</span></div>
+        ${d.me.isAdmin
+          ? `<button class="btn" data-a="kickoff" ${!a || !b ? "disabled" : ""}>▶️ Начать игру</button>
+             <p class="muted center">После старта включится отметка голов, запись на игру закроется, в группу уйдут составы.</p>`
+          : `<p class="muted center">Админ начнёт игру${d.game.time ? " в " + esc(d.game.time) : ""} — тогда здесь появятся кнопки для голов.</p>`}
+        <h2>Этот телефон</h2>
+        <div class="seg">
+          <button class="A ${S.side === "A" ? "on" : ""}" data-a="side" data-side="A">У ворот<br><span class="dotA"></span> ${esc(tn.A.split(" ").slice(1).join(" "))}</button>
+          <button class="B ${S.side === "B" ? "on" : ""}" data-a="side" data-side="B">У ворот<br><span class="dotB"></span> ${esc(tn.B.split(" ").slice(1).join(" "))}</button>
+          <button class="W ${S.side === "W" || !S.side ? "on" : ""}" data-a="side" data-side="W">👀<br>Смотрю</button>
+        </div>
+        <p class="muted">Можно выбрать заранее — после старта сразу появятся кнопки.</p>`;
+    }
     let entry = "";
     if (S.side === "A" || S.side === "B") {
       const attack = other(S.side);
@@ -330,7 +345,8 @@
       </div>
       ${entry}
       <h2>Голы</h2>${feed}
-      ${d.me.isAdmin ? `<button class="btn danger" data-a="finish">🏁 Завершить матч и отправить итог</button>` : ""}`;
+      ${d.me.isAdmin ? `<button class="btn danger" data-a="finish">🏁 Завершить матч и отправить итог</button>
+        ${!ev.length ? `<button class="btn ghost" data-a="unstart">↩️ Отменить старт</button>` : ""}` : ""}`;
   }
 
   function teamsView() {
@@ -358,7 +374,9 @@
           : `<div class="chip">${esc(p.name)}</div>`).join("")}` : ""}
       ${admin && m.status === "open" ? `<h2>Убрать из состава</h2><p class="muted">Ушёл до конца игры — уберите, голы и пасы сохранятся.</p>
         ${m.players.map((p) => `<button class="chip" data-a="move" data-id="${p.id}" data-to="">${esc(p.name)}<small>убрать</small></button>`).join("")}` : ""}
-      ${admin && m.status === "open" ? `<div class="row"><button class="btn ghost" data-a="auto" data-mode="shuffle">🎲 Другой вариант</button><button class="btn ghost" data-a="auto" data-mode="best">⚖️ Ровнее</button></div>` : ""}`;
+      ${admin && m.phase === "draft" ? `<div class="row"><button class="btn ghost" data-a="auto" data-mode="shuffle">🎲 Другой вариант</button><button class="btn ghost" data-a="auto" data-mode="best">⚖️ Ровнее</button></div>
+        <button class="btn" data-a="kickoff">▶️ Начать игру</button>` : ""}
+      ${admin && m.phase === "live" ? `<p class="muted">Игра идёт — составы правятся только вручную.</p>` : ""}`;
   }
 
   const fmtD = (d) => `<span class="${d > 0 ? "up" : d < 0 ? "down" : "muted"}">${d > 0 ? "+" : d < 0 ? "−" : "±"}${Math.abs(d).toFixed(2).replace(".", ",")}</span>`;
@@ -378,7 +396,7 @@
     if (S.histView === "matches") {
       return seg + (matches.length ? matches.map((m) => `
         <button class="card" data-a="match" data-id="${m.id}">
-          <span class="grow">${esc(m.title)}${m.status === "open" ? ` <span class="muted">· ${m.score.A + m.score.B ? "идёт" : "составы собраны"}</span>` : ""}</span>
+          <span class="grow">${esc(m.title)}${m.status === "open" ? ` <span class="muted">· ${m.started ? "идёт" : "составы собраны"}</span>` : ""}</span>
           <span class="sc"><span class="dotA"></span> ${m.score.A} : ${m.score.B} <span class="dotB"></span></span>
         </button>`).join("") : `<div class="empty">Матчей пока не было</div>`);
     }
@@ -582,6 +600,12 @@
         confirmBox("Завершить матч и отправить итог в группу?").then((ok) => ok && adminCall("POST", "/finish", undefined, "Итог отправлен в группу"));
         break;
       case "reopen": adminCall("POST", "/reopen"); break;
+      case "kickoff":
+        confirmBox("Начать игру? Запись закроется, в группу уйдут составы.").then((ok) => ok && adminCall("POST", "/start", undefined, "Игра началась!").then(() => { S.tab = "board"; render(); }));
+        break;
+      case "unstart":
+        confirmBox("Отменить старт? Можно будет снова пересобрать составы.").then((ok) => ok && adminCall("POST", "/unstart"));
+        break;
     }
   });
 
