@@ -535,9 +535,15 @@
     if (!S.data) return;
     const d = S.data;
     if (!d.game) { app.innerHTML = `<div class="empty">Ближайшей игры нет.<br>Админ создаёт запись командой /game</div>`; return; }
+    const cancelledBanner = d.game.cancelled
+      ? `<div class="banner center">❌ Игра ${esc(d.game.title)} отменена${d.game.cancelReason ? ": " + esc(d.game.cancelReason) : ""}</div>`
+      : "";
     if (S.tab === "ratings" && !d.me.isAdmin) S.tab = "board";
-    const tabs = [["board", "Табло"], ["teams", "Составы"], ["history", "История"], ...(d.me.isAdmin ? [["ratings", "Игроки"]] : [])];
-    app.innerHTML = `${scoreView()}
+    if (d.game.cancelled && (S.tab === "board" || S.tab === "teams")) S.tab = "history";
+    const tabs = d.game.cancelled
+      ? [["history", "История"], ...(d.me.isAdmin ? [["ratings", "Игроки"]] : [])]
+      : [["board", "Табло"], ["teams", "Составы"], ["history", "История"], ...(d.me.isAdmin ? [["ratings", "Игроки"]] : [])];
+    app.innerHTML = `${d.game.cancelled ? cancelledBanner : scoreView()}
       <div class="tabs">${tabs.map(([k, l]) => `<button data-a="tab" data-tab="${k}" class="${S.tab === k ? "on" : ""}">${l}</button>`).join("")}</div>
       ${S.queue.length ? `<div class="muted center">⏳ Не отправлено: ${S.queue.length} — отправлю, как появится связь</div>` : ""}
       ${S.tab === "board" ? boardView() : S.tab === "teams" ? teamsView() : S.tab === "history" ? historyView() : ratingsView()}`;

@@ -91,6 +91,7 @@ export function createApi(makeApi: (env: Env) => Api = (env) => new Api(env.BOT_
   const currentWeek = async (c: C): Promise<Week> => {
     const week = await getCurrentWeek(c.env.DB, c.var.cfg.groupChatId, localToday(new Date(), c.var.cfg.timezone).date);
     if (!week) throw new HttpError(404, "Ближайшей игры нет — создайте запись командой /game");
+    if (week.cancelled_at) throw new HttpError(409, "Игра отменена");
     return week;
   };
 
@@ -109,6 +110,14 @@ export function createApi(makeApi: (env: Env) => Api = (env) => new Api(env.BOT_
     const week = await getCurrentWeek(db, c.var.cfg.groupChatId, localToday(new Date(), c.var.cfg.timezone).date);
     const base = { me: { playerId: me.id, name: playerName(me), isAdmin }, teamNames: TEAM_NAMES };
     if (!week) return c.json({ ...base, game: null, roster: [], match: null });
+    if (week.cancelled_at) {
+      return c.json({
+        ...base,
+        game: { weekId: week.id, date: week.game_date, title: formatGameDate(week.game_date), time: c.var.cfg.gameTime, cancelled: true, cancelReason: week.cancel_reason ?? null },
+        roster: [],
+        match: null,
+      });
+    }
 
     const roster = await getRoster(db, week);
     const skills = isAdmin ? await skillMap(db) : new Map<number, number>();

@@ -239,3 +239,48 @@ describe("запись на игру", () => {
     expect(calls.map((c) => c.method)).toEqual(expect.arrayContaining(["sendMessage", "deleteMessage"]));
   });
 });
+
+describe("отмена игры", () => {
+  it("/cancel: только админ; пост помечен, кнопки убраны, записавшиеся упомянуты, матч удалён", async () => {
+    vi.setSystemTime(WEDNESDAY);
+    const week = await env.DB.prepare(`SELECT * FROM weeks WHERE game_date = '2026-10-29'`).first<any>();
+    // составы уже собраны (черновик матча)
+    const m = await env.DB.prepare(`INSERT INTO matches (week_id) VALUES (?1) RETURNING id`).bind(week.id).first<{ id: number }>();
+
+    expect((await command(7, "/cancel поле занято")).find((c) => c.method === "sendMessage")!.payload.text).toContain("только для админов");
+
+    await command(ADMIN, "/cancel поле занято");
+    const edit = calls.find((c) => c.method === "editMessageText")!.payload;
+    expect(edit.text).toContain("Игра отменена</b>: поле занято");
+    expect(edit.reply_markup).toBeUndefined(); // кнопок больше нет
+    const msg = sentTo(GROUP).at(-1)!.payload.text as string;
+    expect(msg).toContain("Игра четверг, 29 октября отменена</b>: поле занято");
+    expect(msg).toContain("Пропуском не считается");
+    expect(msg).toContain('<a href="tg://user?id=6">'); // записавшиеся упомянуты
+    expect(await env.DB.prepare(`SELECT id FROM matches WHERE id = ?1`).bind(m!.id).first()).toBeNull();
+
+    // старые кнопки
+    const ans = await click(20, week.id, "in");
+    expect(ans.text).toContain("отменена");
+    // повтор
+    expect(sentTo(GROUP).length).toBe(0);
+    await command(ADMIN, "/cancel");
+    expect(sentTo(GROUP)[0].payload.text).toContain("уже отменена");
+  });
+
+  it("/game возвращает отменённую игру с прежней записью", async () => {
+    await command(ADMIN, "/game");
+    const post = sentTo(GROUP)[0].payload;
+    expect(post.text).toContain("Играют (");
+    expect(post.text).not.toContain("отменена");
+    expect(post.reply_markup.inline_keyboard[0][0].text).toBe("✅ Играю");
+  });
+
+  it("с голами отменить нельзя", async () => {
+    const week = await env.DB.prepare(`SELECT * FROM weeks WHERE game_date = '2026-10-29'`).first<any>();
+    const m = await env.DB.prepare(`INSERT INTO matches (week_id, started_at) VALUES (?1, '2026-10-29T16:30:00Z') RETURNING id`).bind(week.id).first<{ id: number }>();
+    await env.DB.prepare(`INSERT INTO match_events (id, match_id, type, team) VALUES ('g-test-0001', ?1, 'goal', 'A')`).bind(m!.id).run();
+    await command(ADMIN, "/cancel");
+    expect(sentTo(GROUP)[0].payload.text).toContain("уже есть голы");
+  });
+});

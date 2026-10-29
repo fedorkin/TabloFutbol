@@ -17,6 +17,15 @@ function title(week: Week, cfg: Config): string {
 }
 
 export function renderRosterText(week: Week, roster: Roster, cfg: Config, extra = ""): string {
+  if (week.cancelled_at) {
+    return [
+      title(week, cfg),
+      "",
+      `❌ <b>Игра отменена</b>${week.cancel_reason ? `: ${esc(week.cancel_reason)}` : ""}`,
+      "",
+      "Пропуском не считается. До следующей игры!",
+    ].join("\n");
+  }
   const lines = [title(week, cfg), ""];
 
   lines.push(`✅ <b>Играют (${roster.main.length}/${week.player_limit})</b>`);

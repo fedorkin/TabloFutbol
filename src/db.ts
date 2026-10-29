@@ -14,6 +14,8 @@ export interface Week {
   player_limit: number;
   status: "open" | "closed";
   message_id: number | null;
+  cancelled_at?: string | null;
+  cancel_reason?: string | null;
 }
 
 export interface RosterEntry {
@@ -248,3 +250,43 @@ export async function setDisplayName(db: D1Database, playerId: number, name: str
 export async function getPlayerByTgId(db: D1Database, tgId: number): Promise<Player | null> {
   return db.prepare(`SELECT * FROM players WHERE tg_id = ?1`).bind(tgId).first<Player>();
 }
+
+// ---------- отмена игры ----------
+
+/** Отменяет игру недели: запись закрывается, матч (если не было голов) удаляется. */
+export async function cancelWeek(db: D1Database, week: Week, reason: string | null): Promise<void> {
+  const match = await db
+    .prepare(`SELECT id, status FROM matches WHERE week_id = ?1`)
+    .bind(week.id)
+    .first<{ id: number; status: string }>();
+  const stmts: D1PreparedStatement[] = [];
+  if (match) {
+    if (match.status === "finished") throw new CancelError("Матч уже завершён — отменять нечего. Можно «Открыть снова» в табло.");
+    const goals = await db
+      .prepare(`SELECT 1 AS x FROM match_events WHERE match_id = ?1 AND cancelled_at IS NULL LIMIT 1`)
+      .bind(match.id)
+      .first();
+    if (goals) throw new CancelError("В матче уже есть голы — сначала уберите их в табло (✕).");
+    stmts.push(
+      db.prepare(`DELETE FROM match_events WHERE match_id = ?1`).bind(match.id),
+      db.prepare(`DELETE FROM match_players WHERE match_id = ?1`).bind(match.id),
+      db.prepare(`DELETE FROM matches WHERE id = ?1`).bind(match.id),
+    );
+  }
+  stmts.push(
+    db
+      .prepare(`UPDATE weeks SET status = 'closed', cancelled_at = datetime('now'), cancel_reason = ?2 WHERE id = ?1`)
+      .bind(week.id, reason),
+  );
+  await db.batch(stmts);
+}
+
+/** Вернуть отменённую игру: запись снова открыта. */
+export async function restoreWeek(db: D1Database, weekId: number): Promise<void> {
+  await db
+    .prepare(`UPDATE weeks SET status = 'open', cancelled_at = NULL, cancel_reason = NULL WHERE id = ?1`)
+    .bind(weekId)
+    .run();
+}
+
+export class CancelError extends Error {}

@@ -12,14 +12,17 @@ import {
   setResponse,
   updateWeek,
   upsertTgPlayer,
+  cancelWeek,
+  CancelError,
+  restoreWeek,
   cleanName,
   playerName,
   setDisplayName,
   type Player,
   type Week,
 } from "./db";
-import { localToday, nextGameDate } from "./dates";
-import { esc, renderRosterText } from "./render";
+import { formatGameDate, localToday, nextGameDate } from "./dates";
+import { esc, mention, renderRosterText } from "./render";
 import { announceKickoff, notifyPromoted, postWeek, refreshWeekMessage } from "./service";
 import { matchList, renderStats, seasonStats } from "./stats";
 import { absenceStreaks, activePauses, endPause, markJoined, markRemoved, SKIP_LIMIT, SKIP_WARN, startPause } from "./absence";
@@ -41,6 +44,7 @@ const HELP = `<b>Команды</b>
 /remove 7 — убрать игрока №7 из списка (или ответом на его сообщение)
 /name 7 Вася — переименовать игрока №7 (или ответом на его сообщение)
 /pause 7 до 15.11 — пауза (отпуск, травма): игры не считаются пропусками; /unpause 7 — снять
+/cancel причина — отменить игру (пост помечается, записавшимся — уведомление, пропуском не считается); вернуть — /game
 /teams — поделить основу на две команды по рейтингу (до старта — сколько угодно раз)
 /kickoff — начать игру: включается табло, запись закрывается
 /tablo — кнопка открытия табло (счёт, составы, рейтинги)`;
@@ -116,6 +120,7 @@ export function createBot(env: Env, botInfo?: UserFromGetMe): Bot {
     const week = await getWeek(db, Number(ctx.match[1]));
     const response = ctx.match[2] as "in" | "out";
     if (!week) return ctx.answerCallbackQuery({ text: "Игра не найдена" });
+    if (week.cancelled_at) return ctx.answerCallbackQuery({ text: "❌ Эта игра отменена", show_alert: true });
     if (week.status !== "open") {
       return ctx.answerCallbackQuery({ text: "🔒 Запись закрыта, напишите админу", show_alert: true });
     }
@@ -143,8 +148,38 @@ export function createBot(env: Env, botInfo?: UserFromGetMe): Bot {
     "game",
     admin(async (ctx) => {
       const date = nextGameDate(new Date(), cfg.timezone, cfg.gameWeekday);
-      const week = await getOrCreateWeek(db, cfg.groupChatId, date, cfg.playerLimit);
+      let week = await getOrCreateWeek(db, cfg.groupChatId, date, cfg.playerLimit);
+      if (week.cancelled_at) {
+        // отменили по ошибке — /game возвращает игру, запись сохранилась
+        await restoreWeek(db, week.id);
+        week = { ...week, status: "open", cancelled_at: null, cancel_reason: null };
+      }
       await postWeek(ctx.api, db, week, cfg);
+    }),
+  );
+
+  bot.command(
+    "cancel",
+    admin(async (ctx, week) => {
+      if (!week) return noGame(ctx);
+      if (week.cancelled_at) return ctx.reply("Эта игра уже отменена. Вернуть — /game");
+      const reason = String(ctx.match ?? "").trim().slice(0, 200) || null;
+      const roster = await getRoster(db, week);
+      try {
+        await cancelWeek(db, week, reason);
+      } catch (e) {
+        if (e instanceof CancelError) return ctx.reply(e.message);
+        throw e;
+      }
+      const cancelled = { ...week, status: "closed" as const, cancelled_at: "now", cancel_reason: reason };
+      await refreshWeekMessage(ctx.api, db, cancelled, cfg).catch(() => {});
+      const who = [...roster.main, ...roster.waitlist];
+      await ctx.reply(
+        `❌ <b>Игра ${esc(formatGameDate(week.game_date))} отменена</b>${reason ? `: ${esc(reason)}` : ""}.\n` +
+          `Пропуском не считается.` +
+          (who.length ? `\n\n${who.map((e) => mention(e)).join(", ")}` : ""),
+        { parse_mode: "HTML" },
+      );
     }),
   );
 
@@ -421,6 +456,7 @@ export const BOT_COMMANDS = [
   { command: "list", description: "Текущий состав" },
   { command: "game", description: "Опубликовать запись на игру (админ)" },
   { command: "close", description: "Закрыть запись (админ)" },
+  { command: "cancel", description: "Отменить игру (админ)" },
   { command: "open", description: "Открыть запись (админ)" },
   { command: "limit", description: "Число мест, напр. /limit 12 (админ)" },
   { command: "add", description: "Добавить игрока (админ)" },
